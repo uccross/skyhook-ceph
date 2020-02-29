@@ -820,6 +820,9 @@ void createFbMeta(
     size_t data_orig_len=0,
     CompressionType data_compression=none);
 
+// stub method
+int tabular_stub_method( int an_int ) ;
+
 // these extract the current data format (flatbuf) into a skyhook
 // root table and row table data structure defined above, abstracting
 // skyhook data partitions from the underlying data format.

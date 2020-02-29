@@ -80,6 +80,8 @@ enum {
   LIBRADOS_OP_FLAG_FADVISE_DONTNEED   = 0x20,
   // indicate read/write data will not accessed again (by *this* client)
   LIBRADOS_OP_FLAG_FADVISE_NOCACHE    = 0x40,
+  // do copy_from append
+  LIBRADOS_OP_FLAG_FADVISE_COPYFROMAPPEND = 0x1,
 };
 
 #if __GNUC__ >= 4

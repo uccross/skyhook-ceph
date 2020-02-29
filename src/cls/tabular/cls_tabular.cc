@@ -33,6 +33,8 @@ cls_method_handle_t h_exec_runstats_op;
 cls_method_handle_t h_build_index;
 cls_method_handle_t h_exec_build_sky_index_op;
 cls_method_handle_t h_transform_db_op;
+cls_method_handle_t h_transform_db_op2;
+cls_method_handle_t h_stub;
 
 
 void cls_log_message(std::string msg, bool is_err = false, int log_level = 20) {
@@ -2072,6 +2074,111 @@ int transform_db_op(cls_method_context_t hctx, bufferlist *in, bufferlist *out)
     return 0;
 }
 
+/*
+ * Function: transform_db_op2
+ * Description: Method to convert database format.
+ * For use in the copy_from with inline transform and append.
+ * @param[in] hctx    : CLS method context
+ * @param[out] in     : input bufferlist
+ * @param[out] out    : output bufferlist
+ * Return Value: error code
+*/
+static
+int transform_db_op2(cls_method_context_t hctx, bufferlist *in, bufferlist *out)
+{
+    //hard code this for now
+    auto qschema = "0 3 1 0 ORDERKEY;" ;
+    //auto qschema = "0 3 1 0 ORDERKEY; 1 3 0 1 PARTKEY; "
+    //               "2 3 0 1 SUPPKEY; 3 3 1 0 LINENUMBER; "
+    //               "4 12 0 1 QUANTITY; 5 13 0 1 EXTENDEDPRICE; "
+    //               "6 12 0 1 DISCOUNT; 7 13 0 1 TAX; "
+    //               "8 9 0 1 RETURNFLAG; 9 9 0 1 LINESTATUS; "
+    //               "10 14 0 1 SHIPDATE; 11 14 0 1 COMMITDATE; "
+    //               "12 14 0 1 RECEIPTDATE; 13 15 0 1 SHIPINSTRUCT; "
+    //               "14 15 0 1 SHIPMODE; 15 15 0 1 COMMENT" ;
+
+    // Columns specified in the query schmea will transformed and not the whole
+    // object.
+    Tables::schema_vec query_schema = Tables::schemaFromString(qschema);
+
+    using namespace Tables;
+    //ceph::bufferlist::iterator it = inbl.begin();
+    ceph::bufferlist::iterator it = in->begin();
+    CLS_LOG( 20, "kat transform_db_op2 : it.get_remaining() = %d", it.get_remaining() ) ; 
+    while (it.get_remaining() > 0) {
+        bufferlist bl;
+        bufferlist transformed_encoded_meta_bl;
+        try {
+            ::decode(bl, it);  // unpack the next bl
+        } catch (const buffer::error &err) {
+            CLS_ERR("ERROR: decoding object format from BL");
+            return -EINVAL;
+        }
+
+        // default usage here assumes the fbmeta is already in the bl
+        sky_meta meta = getSkyMeta(&bl);
+        std::string errmsg;
+
+        // CREATE An FB_META, start with an empty builder first
+        flatbuffers::FlatBufferBuilder *meta_builder =                  \
+            new flatbuffers::FlatBufferBuilder();
+
+        std::shared_ptr<arrow::Table> table;
+        int ret = transform_fb_to_arrow(meta.blob_data, meta.blob_size,
+                                        query_schema, errmsg, &table);
+        if (ret != 0) {
+            CLS_ERR("ERROR: transforming object from flatbuffer to arrow");
+            return ret;
+        }
+
+        // Convert arrow to a buffer
+        std::shared_ptr<arrow::Buffer> buffer;
+        convert_arrow_to_buffer(table, &buffer);
+
+        createFbMeta(meta_builder,
+                     SFT_ARROW,
+                     reinterpret_cast<unsigned char*>(buffer->mutable_data()),
+                     buffer->size());
+
+        // Add meta_builder's data into a bufferlist as char*
+        bufferlist meta_bl;
+        meta_bl.append(reinterpret_cast<const char*>(                   \
+                               meta_builder->GetBufferPointer()),
+                       meta_builder->GetSize());
+        ::encode(meta_bl, transformed_encoded_meta_bl);
+        delete meta_builder;
+
+        // write the results to outbl
+        CLS_LOG(20, "kat transform_db_op2 : transformed_encoded_meta_bl.length() = %d", transformed_encoded_meta_bl.length());
+        out->append( transformed_encoded_meta_bl.c_str(), transformed_encoded_meta_bl.length() );
+  }
+  return 0;
+}
+/*
+ * Function: stub
+ * Description: 
+ * @param[in] hctx    : CLS method context
+ * @param[out] in     : input bufferlist
+ * @param[out] out    : output bufferlist
+ * Return Value: error code
+*/
+static
+int stub(cls_method_context_t hctx, bufferlist *in, bufferlist *out)
+{
+    auto a = Tables::tabular_stub_method( 500 ) ;
+    auto a_str = std::to_string( a ) ;
+
+    CLS_LOG( 10, "kat stub: blah0" ) ;
+    CLS_LOG( 20, "kat stub: %s", a_str.c_str()) ;
+    CLS_LOG( 20, "kat stub: in->length() = %d", in->length()) ;
+    CLS_LOG( 20, "kat stub: in->c_str()  = %s", in->c_str()) ;
+
+    // save a test object
+    out->append( "KAT" );
+    out->append( in->c_str(), in->length() );
+
+    return 0;
+}
 
 static
 int example_query_op(cls_method_context_t hctx, bufferlist *in, bufferlist *out)
@@ -2314,5 +2421,11 @@ void __cls_init()
 
   cls_register_cxx_method(h_class, "transform_db_op",
       CLS_METHOD_RD | CLS_METHOD_WR, transform_db_op, &h_transform_db_op);
+
+  cls_register_cxx_method(h_class, "transform_db_op2",
+      CLS_METHOD_RD | CLS_METHOD_WR, transform_db_op2, &h_transform_db_op2);
+
+  cls_register_cxx_method(h_class, "stub",
+      CLS_METHOD_RD | CLS_METHOD_WR, stub, &h_stub);
 }
 

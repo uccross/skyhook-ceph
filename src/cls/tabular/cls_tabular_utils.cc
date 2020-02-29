@@ -6530,6 +6530,12 @@ int transform_fbxrows_to_fbucols(const char* fb,
     return errcode;
 } // transform_fbxrows_to_fbucols
 
+// stub method
+int tabular_stub_method( int an_int ) {
+  std::cout << "asdfqwer" << std::endl ;
+  return an_int ;
+}
+
 
 // a simple func called from a registered cls class method in cls_tabular.cc
 int example_func(int counter) {
