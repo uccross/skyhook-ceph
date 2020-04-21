@@ -230,6 +230,10 @@ class TestVolume(object):
     def test_is_not_ceph_device(self, dev):
         assert not api.is_ceph_device(dev)
 
+    def test_no_empty_lv_name(self):
+        with pytest.raises(ValueError):
+            api.Volume(lv_name='', lv_tags='')
+
 
 class TestVolumes(object):
 
@@ -326,6 +330,13 @@ class TestVolumes(object):
     def test_filter_requires_params(self, volumes):
         with pytest.raises(TypeError):
             volumes.filter()
+
+
+class TestVolumeGroup(object):
+
+    def test_volume_group_no_empty_name(self):
+        with pytest.raises(ValueError):
+            api.VolumeGroup(vg_name='')
 
 
 class TestVolumeGroups(object):
@@ -533,6 +544,7 @@ class TestCreateLV(object):
         self.foo_volume = api.Volume(lv_name='foo', lv_path='/path', vg_name='foo_group', lv_tags='')
         self.foo_group = api.VolumeGroup(vg_name='foo_group',
                                          vg_extent_size=4194304,
+                                         vg_extent_count=100,
                                          vg_free_count=100)
 
     @patch('ceph_volume.api.lvm.process.run')
@@ -961,3 +973,23 @@ class TestIsLV(object):
         splitname = {'LV_NAME': 'data', 'VG_NAME': 'ceph'}
         monkeypatch.setattr(api, 'dmsetup_splitname', lambda x, **kw: splitname)
         assert api.is_lv('/dev/sda1', lvs=volumes) is True
+
+class TestGetDeviceVgs(object):
+
+    @patch('ceph_volume.process.call')
+    @patch('ceph_volume.api.lvm._output_parser')
+    def test_get_device_vgs_with_empty_pv(self, patched_output_parser, pcall):
+        patched_output_parser.return_value = [{'vg_name': ''}]
+        pcall.return_value = ('', '', '')
+        vgs = api.get_device_vgs('/dev/foo')
+        assert vgs == []
+
+class TestGetDeviceLvs(object):
+
+    @patch('ceph_volume.process.call')
+    @patch('ceph_volume.api.lvm._output_parser')
+    def test_get_device_lvs_with_empty_vg(self, patched_output_parser, pcall):
+        patched_output_parser.return_value = [{'lv_name': ''}]
+        pcall.return_value = ('', '', '')
+        vgs = api.get_device_lvs('/dev/foo')
+        assert vgs == []
