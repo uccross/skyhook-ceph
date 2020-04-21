@@ -23,14 +23,11 @@
 #################################################################################
 %bcond_with make_check
 %bcond_without ceph_test_package
-%endif
-%bcond_with make_check
 %ifarch s390 s390x
 %bcond_with tcmalloc
 %else
 %bcond_without tcmalloc
 %endif
-%bcond_with lowmem_builder
 %if 0%{?fedora} || 0%{?rhel}
 %bcond_without selinux
 %bcond_without cephfs_java
@@ -127,7 +124,6 @@ Source0:	%{?_remote_tarball_prefix}@TARBALL_BASENAME@.tar.bz2
 # _insert_obs_source_lines_here
 ExclusiveArch:  x86_64 aarch64 ppc64le s390x
 %endif
-%endif
 #################################################################################
 # dependencies that apply across all distro families
 #################################################################################
@@ -143,7 +139,6 @@ BuildRequires:	sharutils
 %if 0%{with selinux}
 BuildRequires:	checkpolicy
 BuildRequires:	selinux-policy-devel
-BuildRequires:	/usr/share/selinux/devel/policyhelp
 %endif
 BuildRequires:	gperf
 %if 0%{?rhel} == 7
@@ -151,16 +146,6 @@ BuildRequires:  cmake3 > 3.5
 %else
 BuildRequires:  cmake > 3.5
 %endif
-%if 0%{?suse_version}
-BuildRequires:	python-CherryPy
-BuildRequires:	python-Werkzeug
-%endif
-BuildRequires:	python-pecan
-BuildRequires:	socat
-%endif
-BuildRequires:	bc
-BuildRequires:	gperf
-BuildRequires:  cmake
 BuildRequires:	cryptsetup
 BuildRequires:	fuse-devel
 %if 0%{?rhel} == 7
@@ -249,13 +234,11 @@ BuildRequires:  yaml-cpp-devel
 %if 0%{?suse_version}
 BuildRequires:  pkgconfig(systemd)
 BuildRequires:	systemd-rpm-macros
-BuildRequires:	systemd
 %{?systemd_requires}
 PreReq:		%fillup_prereq
 BuildRequires:	fdupes
 BuildRequires:	net-tools
 BuildRequires:	libbz2-devel
-BuildRequires:  btrfsprogs
 BuildRequires:	mozilla-nss-devel
 BuildRequires:	keyutils-devel
 BuildRequires:  libopenssl-devel
@@ -276,7 +259,6 @@ BuildRequires:  golang-github-prometheus-prometheus
 %if 0%{?fedora} || 0%{?rhel}
 Requires:	systemd
 BuildRequires:  boost-random
-BuildRequires:	btrfs-progs
 BuildRequires:	nss-devel
 BuildRequires:	keyutils-libs-devel
 BuildRequires:	libibverbs-devel
@@ -378,7 +360,6 @@ Requires:      cryptsetup
 Requires:      e2fsprogs
 Requires:      findutils
 Requires:      grep
-Requires:      xfsprogs
 Requires:      logrotate
 Requires:      parted
 Requires:      psmisc
@@ -449,13 +430,6 @@ Group:		System/Filesystems
 %endif
 Provides:	ceph-test:/usr/bin/ceph-monstore-tool
 Requires:	ceph-base = %{_epoch_prefix}%{version}-%{release}
-# For ceph-rest-api
-%if 0%{?fedora} || 0%{?rhel}
-Requires:      python-flask
-%endif
-%if 0%{?suse_version}
-Requires:      python-Flask
-%endif
 %description mon
 ceph-mon is the cluster monitor daemon for the Ceph distributed file
 system. One or more instances of ceph-mon form a Paxos part-time
@@ -1155,7 +1129,6 @@ done
 # the following setting fixed an OOM condition we once encountered in the OBS
 RPM_OPT_FLAGS="$RPM_OPT_FLAGS --param ggc-min-expand=20 --param ggc-min-heapsize=32768"
 %endif
-export RPM_OPT_FLAGS=`echo $RPM_OPT_FLAGS | sed -e 's/i386/i486/'`
 
 export CPPFLAGS="$java_inc"
 export CFLAGS="$RPM_OPT_FLAGS"
@@ -1202,7 +1175,6 @@ ${CMAKE} .. \
     -DCMAKE_INSTALL_MANDIR=%{_mandir} \
     -DCMAKE_INSTALL_DOCDIR=%{_docdir}/ceph \
     -DCMAKE_INSTALL_INCLUDEDIR=%{_includedir} \
-    -DWITH_EMBEDDED=OFF \
     -DWITH_MANPAGE=ON \
     -DWITH_PYTHON3=%{python3_version} \
     -DWITH_MGR_DASHBOARD_FRONTEND=OFF \
@@ -1269,7 +1241,6 @@ ctest "$CEPH_MFLAGS_JOBS"
 %endif
 
 
-
 %install
 pushd build
 make DESTDIR=%{buildroot} install
@@ -1284,7 +1255,6 @@ install -m 0644 -D etc/sysconfig/ceph %{buildroot}%{_sysconfdir}/sysconfig/ceph
 install -m 0644 -D etc/sysconfig/ceph %{buildroot}%{_fillupdir}/sysconfig.%{name}
 %endif
 install -m 0644 -D systemd/ceph.tmpfiles.d %{buildroot}%{_tmpfilesdir}/ceph-common.conf
-install -m 0755 -D systemd/ceph %{buildroot}%{_sbindir}/rcceph
 install -m 0644 -D systemd/50-ceph.preset %{buildroot}%{_libexecdir}/systemd/system-preset/50-ceph.preset
 mkdir -p %{buildroot}%{_sbindir}
 install -m 0644 -D src/logrotate.conf %{buildroot}%{_sysconfdir}/logrotate.d/ceph
@@ -1294,8 +1264,6 @@ install -m 0644 -D etc/sysctl/90-ceph-osd.conf %{buildroot}%{_sysctldir}/90-ceph
 
 # firewall templates and /sbin/mount.ceph symlink
 %if 0%{?suse_version}
-install -m 0644 -D etc/sysconfig/SuSEfirewall2.d/services/ceph-mon %{buildroot}%{_sysconfdir}/sysconfig/SuSEfirewall2.d/services/ceph-mon
-install -m 0644 -D etc/sysconfig/SuSEfirewall2.d/services/ceph-osd-mds %{buildroot}%{_sysconfdir}/sysconfig/SuSEfirewall2.d/services/ceph-osd-mds
 mkdir -p %{buildroot}/sbin
 ln -sf %{_sbindir}/mount.ceph %{buildroot}/sbin/mount.ceph
 %endif
@@ -1353,13 +1321,8 @@ rm -rf %{buildroot}
 %{_bindir}/osdmaptool
 %{_bindir}/ceph-kvstore-tool
 %{_bindir}/ceph-run
-%{_bindir}/ceph-detect-init
 %{_libexecdir}/systemd/system-preset/50-ceph.preset
 %{_sbindir}/ceph-create-keys
-%{_sbindir}/ceph-disk
-%{_sbindir}/ceph-volume
-%{_sbindir}/ceph-volume-systemd
-%{_sbindir}/rcceph
 %dir %{_libexecdir}/ceph
 %{_libexecdir}/ceph/ceph_common.sh
 %dir %{_libdir}/rados-classes
@@ -1372,7 +1335,6 @@ rm -rf %{buildroot}
 %{_unitdir}/ceph-crash.service
 %dir %{_libdir}/ceph/crypto
 %{_libdir}/ceph/crypto/libceph_*.so*
-%endif
 %if %{with lttng}
 %{_libdir}/libos_tp.so*
 %{_libdir}/libosd_tp.so*
@@ -1384,8 +1346,6 @@ rm -rf %{buildroot}
 %if 0%{?suse_version}
 %{_fillupdir}/sysconfig.*
 %endif
-%{_unitdir}/ceph-disk@.service
-%{_unitdir}/ceph-volume@.service
 %{_unitdir}/ceph.target
 %if 0%{with python2}
 %dir %{python_sitelib}/ceph_volume
@@ -1397,9 +1357,7 @@ rm -rf %{buildroot}
 %{python3_sitelib}/ceph_volume-*
 %endif
 %{_mandir}/man8/ceph-deploy.8*
-%{_mandir}/man8/ceph-detect-init.8*
 %{_mandir}/man8/ceph-create-keys.8*
-%{_mandir}/man8/ceph-disk.8*
 %{_mandir}/man8/ceph-run.8*
 %{_mandir}/man8/crushtool.8*
 %{_mandir}/man8/osdmaptool.8*
@@ -1441,7 +1399,6 @@ fi
 
 %postun base
 /sbin/ldconfig
-test -n "$FIRST_ARG" || FIRST_ARG=$1
 %if 0%{?suse_version}
 DISABLE_RESTART_ON_UPDATE="yes"
 %service_del_postun ceph.target
@@ -1456,9 +1413,6 @@ if [ $1 -ge 1 ] ; then
   if [ -f $SYSCONF_CEPH -a -r $SYSCONF_CEPH ] ; then
     source $SYSCONF_CEPH
   fi
-  if [ "X$CEPH_AUTO_RESTART_ON_UPGRADE" = "Xyes" ] ; then
-    /usr/bin/systemctl try-restart ceph-disk@\*.service ceph-volume@\*.service > /dev/null 2>&1 || :
-  fi
 fi
 
 %files common
@@ -1471,7 +1425,6 @@ fi
 %{_bindir}/ceph-dencoder
 %{_bindir}/ceph-rbdnamer
 %{_bindir}/ceph-syn
-%{_bindir}/ceph-crush-location
 %{_bindir}/cephfs-data-scan
 %{_bindir}/cephfs-journal-tool
 %{_bindir}/cephfs-table-tool
@@ -1489,7 +1442,6 @@ fi
 %{_bindir}/rbd-replay-prep
 %endif
 %{_bindir}/ceph-post-file
-%{_bindir}/ceph-brag
 %{_tmpfilesdir}/ceph-common.conf
 %{_mandir}/man8/ceph-authtool.8*
 %{_mandir}/man8/ceph-conf.8*
@@ -1517,8 +1469,6 @@ fi
 %config %{_sysconfdir}/bash_completion.d/radosgw-admin
 %config(noreplace) %{_sysconfdir}/ceph/rbdmap
 %{_unitdir}/rbdmap.service
-%{python_sitelib}/ceph_argparse.py*
-%{python_sitelib}/ceph_daemon.py*
 %dir %{_udevrulesdir}
 %{_udevrulesdir}/50-rbd.rules
 %attr(3770,ceph,ceph) %dir %{_localstatedir}/log/ceph/
@@ -1589,7 +1539,6 @@ fi
 %endif
 
 %postun mds
-test -n "$FIRST_ARG" || FIRST_ARG=$1
 %if 0%{?suse_version}
 DISABLE_RESTART_ON_UPDATE="yes"
 %service_del_postun ceph-mds@\*.service ceph-mds.target
@@ -1665,7 +1614,6 @@ fi
 %endif
 
 %postun mgr
-test -n "$FIRST_ARG" || FIRST_ARG=$1
 %if 0%{?suse_version}
 DISABLE_RESTART_ON_UPDATE="yes"
 %service_del_postun ceph-mgr@\*.service ceph-mgr.target
@@ -1767,8 +1715,6 @@ fi
 %{_bindir}/ceph-mon
 %{_bindir}/ceph-monstore-tool
 %{_mandir}/man8/ceph-mon.8*
-%{_mandir}/man8/ceph-rest-api.8*
-%{python_sitelib}/ceph_rest_api.py*
 %{_unitdir}/ceph-mon@.service
 %{_unitdir}/ceph-mon.target
 %attr(750,ceph,ceph) %dir %{_localstatedir}/lib/ceph/mon
@@ -1795,7 +1741,6 @@ fi
 %endif
 
 %postun mon
-test -n "$FIRST_ARG" || FIRST_ARG=$1
 %if 0%{?suse_version}
 DISABLE_RESTART_ON_UPDATE="yes"
 %service_del_postun ceph-mon@\*.service ceph-mon.target
@@ -1854,7 +1799,6 @@ fi
 %endif
 
 %postun -n rbd-mirror
-test -n "$FIRST_ARG" || FIRST_ARG=$1
 %if 0%{?suse_version}
 DISABLE_RESTART_ON_UPDATE="yes"
 %service_del_postun ceph-rbd-mirror@\*.service ceph-rbd-mirror.target
@@ -1910,7 +1854,6 @@ fi
 %endif
 
 %postun radosgw
-test -n "$FIRST_ARG" || FIRST_ARG=$1
 %if 0%{?suse_version}
 DISABLE_RESTART_ON_UPDATE="yes"
 %service_del_postun ceph-radosgw@\*.service ceph-radosgw.target
@@ -1978,7 +1921,6 @@ fi
 %endif
 
 %postun osd
-test -n "$FIRST_ARG" || FIRST_ARG=$1
 %if 0%{?suse_version}
 DISABLE_RESTART_ON_UPDATE="yes"
 %service_del_postun ceph-osd@\*.service ceph-volume@\*.service ceph-osd.target
@@ -2024,15 +1966,7 @@ fi
 %files -n librados-devel
 %dir %{_includedir}/rados
 %{_includedir}/rados/librados.h
-%{_includedir}/rados/librados.hpp
-%{_includedir}/rados/buffer.h
-%{_includedir}/rados/buffer_fwd.h
-%{_includedir}/rados/inline_memory.h
-%{_includedir}/rados/page.h
-%{_includedir}/rados/crc32c.h
 %{_includedir}/rados/rados_types.h
-%{_includedir}/rados/rados_types.hpp
-%{_includedir}/rados/memory.h
 %{_libdir}/librados.so
 %if %{with lttng}
 %{_libdir}/librados_tp.so
@@ -2205,17 +2139,8 @@ fi
 %{_bindir}/ceph_rgw_multiparser
 %{_bindir}/ceph_scratchtool
 %{_bindir}/ceph_scratchtoolpp
-%{_bindir}/ceph_smalliobench
-%{_bindir}/ceph_smalliobenchdumb
-%{_bindir}/ceph_smalliobenchfs
-%{_bindir}/ceph_smalliobenchrbd
 %{_bindir}/ceph_test_*
-%{_bindir}/ceph_tpbench
-%{_bindir}/ceph_xattr_bench
 %{_bindir}/ceph-coverage
-%{_bindir}/ceph-monstore-tool
-%{_bindir}/ceph-osdomap-tool
-%{_bindir}/ceph-kvstore-tool
 %{_bindir}/ceph-debugpack
 %{_bindir}/cephdeduptool
 %{_mandir}/man8/ceph-debugpack.8*
