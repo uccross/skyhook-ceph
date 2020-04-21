@@ -1,5 +1,5 @@
-lib/udev/rules.d/60-ceph-by-parttypeuuid.rules
-lib/udev/rules.d/95-ceph-osd.rules
+lib/systemd/system/ceph-osd*
+lib/systemd/system/ceph-volume@.service
 usr/bin/ceph-bluestore-tool
 usr/bin/ceph-clsinfo
 usr/bin/ceph-objectstore-tool
@@ -22,3 +22,4 @@ usr/share/man/man8/ceph-volume-systemd.8
 usr/share/man/man8/ceph-osd.8
 usr/share/man/man8/ceph-bluestore-tool.8
 etc/sysctl.d/30-ceph-osd.conf
+etc/sudoers.d/ceph-osd-smartctl

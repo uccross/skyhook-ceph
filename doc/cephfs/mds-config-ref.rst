@@ -10,15 +10,6 @@
 :Type: Boolean
 :Default: ``true`` 
 
-
-``mds max file size``
-
-:Description: The maximum allowed file size to set when creating a 
-              new file system.
-
-:Type:  64-bit Integer Unsigned
-:Default:  ``1ULL << 40``
-
 ``mds cache memory limit``
 
 :Description: The memory limit the MDS should enforce for its cache.
@@ -97,27 +88,14 @@
 
 ``mds blacklist interval``
 
-:Description: The blacklist duration for failed MDSs in the OSD map.
+:Description: The blacklist duration for failed MDSs in the OSD map. Note,
+              this controls how long failed MDS daemons will stay in the
+              OSDMap blacklist. It has no effect on how long something is
+              blacklisted when the administrator blacklists it manually. For
+              example, ``ceph osd blacklist add`` will still use the default
+              blacklist time.
 :Type:  Float
 :Default: ``24.0*60.0``
-
-
-``mds session timeout``
-
-:Description: The interval (in seconds) of client inactivity before Ceph 
-              times out capabilities and leases.
-              
-:Type:  Float
-:Default: ``60``
-
-
-``mds session autoclose``
-
-:Description: The interval (in seconds) before Ceph closes 
-              a laggy client's session.
-              
-:Type:  Float
-:Default: ``300``
 
 
 ``mds reconnect timeout``
@@ -163,13 +141,6 @@
 :Description: Determines whether the MDS should allow clients to see request 
               results before they commit to the journal.
 
-:Type:  Boolean
-:Default: ``true``
-
-
-``mds use tmap``
-
-:Description: Use trivialmap for directory updates.
 :Type:  Boolean
 :Default: ``true``
 
@@ -249,13 +220,6 @@
 :Default: ``0``
 
 
-``mds bal frag``
-
-:Description: Determines whether the MDS will fragment directories.
-:Type:  Boolean
-:Default:  ``false``
-
-
 ``mds bal split size``
 
 :Description: The maximum directory size before the MDS will split a directory 
@@ -308,7 +272,7 @@
 
 ``mds bal fragment interval``
 
-:Description: The delay (in seconds) between a fragment being elegible for split
+:Description: The delay (in seconds) between a fragment being eligible for split
               or merge and executing the fragmentation change.
 :Type:  32-bit Integer
 :Default: ``5``
@@ -569,7 +533,7 @@
               (for testing only).
               
 :Type:  Boolean
-:Default: ``0``
+:Default: ``false``
 
 
 ``mds wipe ino prealloc``
@@ -578,7 +542,7 @@
               (for testing only).
               
 :Type:  Boolean
-:Default: ``0``
+:Default: ``false``
 
 
 ``mds skip ino``

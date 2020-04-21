@@ -25,9 +25,8 @@
 
 #include <iosfwd>
 #include <string>
-#include <boost/utility/string_view.hpp>
+#include <string_view>
 #include <vector>
-using namespace std;
 
 #include "buffer.h"
 #include "encoding.h"
@@ -74,7 +73,7 @@ class filepath {
 
  public:
   filepath() : ino(0), encoded(false) { }
-  filepath(boost::string_view s, inodeno_t i) : ino(i), path(s), encoded(false) { }
+  filepath(std::string_view s, inodeno_t i) : ino(i), path(s), encoded(false) { }
   filepath(const string& s, inodeno_t i) : ino(i), path(s), encoded(false) { }
   filepath(const char* s, inodeno_t i) : ino(i), path(s), encoded(false) { }
   filepath(const filepath& o) {
@@ -89,24 +88,24 @@ class filepath {
    * if we are fed a relative path as a string, either set ino=0 (strictly
    * relative) or 1 (absolute).  throw out any leading '/'.
    */
-  filepath(boost::string_view s) : encoded(false) {
+  filepath(std::string_view s) : encoded(false) {
     set_path(s);
   }
   filepath(const char *s) : encoded(false) {
-    set_path(boost::string_view(s));
+    set_path(std::string_view(s));
   }
 
-  void set_path(boost::string_view s, inodeno_t b) {
-    path = std::string(s);
+  void set_path(std::string_view s, inodeno_t b) {
+    path = s;
     ino = b;
   }
-  void set_path(boost::string_view s) {
+  void set_path(std::string_view s) {
     if (s[0] == '/') {
-      path = std::string(s.substr(1));
+      path = s.substr(1);
       ino = 1;
     } else {
       ino = 0;
-      path = std::string(s);
+      path = s;
     }
     bits.clear();
   }
@@ -135,7 +134,7 @@ class filepath {
 
   const string& last_dentry() const {
     if (bits.empty() && path.length() > 0) parse_bits();
-    assert(!bits.empty());
+    ceph_assert(!bits.empty());
     return bits[ bits.size()-1 ];
   }
 
@@ -168,43 +167,45 @@ class filepath {
     bits.pop_back();
     rebuild_path();
   }    
-  void push_dentry(boost::string_view s) {
+  void push_dentry(std::string_view s) {
     if (bits.empty() && path.length() > 0) 
       parse_bits();
     if (!bits.empty())
       path += "/";
-    path += std::string(s);
-    bits.emplace_back(std::string(s));
+    path += s;
+    bits.emplace_back(s);
   }
   void push_dentry(const string& s) {
-    push_dentry(boost::string_view(s));
+    push_dentry(std::string_view(s));
   }
   void push_dentry(const char *cs) {
-    push_dentry(boost::string_view(cs, strlen(cs)));
+    push_dentry(std::string_view(cs, strlen(cs)));
   }
   void push_front_dentry(const string& s) {
     bits.insert(bits.begin(), s);
     rebuild_path();
   }
   void append(const filepath& a) {
-    assert(a.pure_relative());
+    ceph_assert(a.pure_relative());
     for (unsigned i=0; i<a.depth(); i++) 
       push_dentry(a[i]);
   }
 
   // encoding
   void encode(bufferlist& bl) const {
+    using ceph::encode;
     __u8 struct_v = 1;
-    ::encode(struct_v, bl);
-    ::encode(ino, bl);
-    ::encode(path, bl);
+    encode(struct_v, bl);
+    encode(ino, bl);
+    encode(path, bl);
   }
-  void decode(bufferlist::iterator& blp) {
+  void decode(bufferlist::const_iterator& blp) {
+    using ceph::decode;
     bits.clear();
     __u8 struct_v;
-    ::decode(struct_v, blp);
-    ::decode(ino, blp);
-    ::decode(path, blp);
+    decode(struct_v, blp);
+    decode(ino, blp);
+    decode(path, blp);
     encoded = true;
   }
   void dump(Formatter *f) const {
@@ -218,6 +219,17 @@ class filepath {
     o.push_back(new filepath("var/log", 1));
     o.push_back(new filepath("foo/bar", 101));
   }
+
+  bool is_last_dot_or_dotdot() const {
+    if (depth() > 0) {
+      std::string dname = last_dentry();
+      if (dname == "." || dname == "..") {
+        return true;
+      }
+    }
+
+    return false;
+  }
 };
 
 WRITE_CLASS_ENCODER(filepath)
@@ -226,7 +238,7 @@ inline ostream& operator<<(ostream& out, const filepath& path)
 {
   if (path.get_ino()) {
     out << '#' << path.get_ino();
-    if (path.depth())
+    if (path.length())
       out << '/';
   }
   return out << path.get_path();

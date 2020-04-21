@@ -1,11 +1,17 @@
-#!/bin/bash -ex
+#!/usr/bin/env bash
+set -ex
 
 IMAGE_FEATURES="layering,exclusive-lock,object-map,fast-diff"
 
+clone_v2_enabled() {
+    image_spec=$1
+    rbd info $image_spec | grep "clone-parent"
+}
+
 create_pools() {
-    ceph osd pool create images 100
+    ceph osd pool create images 32
     rbd pool init images
-    ceph osd pool create volumes 100
+    ceph osd pool create volumes 32
     rbd pool init volumes
 }
 
@@ -34,8 +40,11 @@ delete_users() {
 }
 
 create_users() {
-    ceph auth get-or-create client.volumes mon 'allow r' osd 'allow class-read object_prefix rbd_children, allow r class-read pool images, allow rwx pool volumes' >> $KEYRING
-    ceph auth get-or-create client.images mon 'allow r' osd 'allow class-read object_prefix rbd_children, allow rwx pool images' >> $KEYRING
+    ceph auth get-or-create client.volumes \
+	mon 'profile rbd' \
+	osd 'profile rbd pool=volumes, profile rbd-read-only pool=images' \
+	mgr 'profile rbd pool=volumes, profile rbd-read-only pool=images' >> $KEYRING
+    ceph auth get-or-create client.images mon 'profile rbd' osd 'profile rbd pool=images' >> $KEYRING
 
     ceph auth get-or-create client.snap_none mon 'allow r' >> $KEYRING
     ceph auth get-or-create client.snap_all mon 'allow r' osd 'allow w' >> $KEYRING
@@ -79,7 +88,11 @@ test_images_access() {
     expect 16 rbd -k $KEYRING --id images snap rm images/foo@snap
 
     rbd -k $KEYRING --id volumes clone --image-feature $IMAGE_FEATURES images/foo@snap volumes/child
-    expect 16 rbd -k $KEYRING --id images snap unprotect images/foo@snap
+
+    if ! clone_v2_enabled images/foo; then
+        expect 16 rbd -k $KEYRING --id images snap unprotect images/foo@snap
+    fi
+
     expect 1 rbd -k $KEYRING --id volumes snap unprotect images/foo@snap
     expect 1 rbd -k $KEYRING --id images flatten volumes/child
     rbd -k $KEYRING --id volumes flatten volumes/child
@@ -125,14 +138,20 @@ test_volumes_access() {
     rbd -k $KEYRING --id volumes snap create volumes/child@snap2
 
     # make sure original snapshot stays protected
-    expect 16 rbd -k $KEYRING --id images snap unprotect images/foo@snap
-    rbd -k $KEYRING --id volumes flatten volumes/child
-    expect 16 rbd -k $KEYRING --id images snap unprotect images/foo@snap
-    rbd -k $KEYRING --id volumes snap rm volumes/child@snap2
-    expect 16 rbd -k $KEYRING --id images snap unprotect images/foo@snap
-    expect 2 rbd -k $KEYRING --id volumes snap rm volumes/child@snap2
-    rbd -k $KEYRING --id volumes snap unprotect volumes/child@snap1
-    expect 16 rbd -k $KEYRING --id images snap unprotect images/foo@snap
+    if clone_v2_enabled images/foo; then
+        rbd -k $KEYRING --id volumes flatten volumes/child
+        rbd -k $KEYRING --id volumes snap rm volumes/child@snap2
+        rbd -k $KEYRING --id volumes snap unprotect volumes/child@snap1
+    else
+        expect 16 rbd -k $KEYRING --id images snap unprotect images/foo@snap
+        rbd -k $KEYRING --id volumes flatten volumes/child
+        expect 16 rbd -k $KEYRING --id images snap unprotect images/foo@snap
+        rbd -k $KEYRING --id volumes snap rm volumes/child@snap2
+        expect 16 rbd -k $KEYRING --id images snap unprotect images/foo@snap
+        expect 2 rbd -k $KEYRING --id volumes snap rm volumes/child@snap2
+        rbd -k $KEYRING --id volumes snap unprotect volumes/child@snap1
+        expect 16 rbd -k $KEYRING --id images snap unprotect images/foo@snap
+    fi
 
     # clean up
     rbd -k $KEYRING --id volumes snap rm volumes/child@snap1
@@ -146,7 +165,7 @@ create_self_managed_snapshot() {
   ID=$1
   POOL=$2
 
-  cat << EOF | CEPH_KEYRING="$KEYRING" python
+  cat << EOF | CEPH_ARGS="-k $KEYRING" python
 import rados
 
 cluster = rados.Rados(conffile="", rados_id="${ID}")
@@ -162,7 +181,7 @@ remove_self_managed_snapshot() {
   ID=$1
   POOL=$2
 
-  cat << EOF | CEPH_KEYRING="$KEYRING" python
+  cat << EOF | CEPH_ARGS="-k $KEYRING" python
 import rados
 
 cluster1 = rados.Rados(conffile="", rados_id="mon_write")
@@ -215,6 +234,17 @@ test_remove_self_managed_snapshots() {
     expect 1 remove_self_managed_snapshot snap_profile_pool volumes
 }
 
+test_rbd_support() {
+    # read-only commands should work on both pools
+    ceph -k $KEYRING --id volumes rbd perf image stats volumes
+    ceph -k $KEYRING --id volumes rbd perf image stats images
+
+    # read/write commands should only work on 'volumes'
+    rbd -k $KEYRING --id volumes create --image-format 2 --image-feature $IMAGE_FEATURES -s 1 volumes/foo
+    ceph -k $KEYRING --id volumes rbd task add remove volumes/foo
+    expect 13 ceph -k $KEYRING --id volumes rbd task add remove images/foo
+}
+
 cleanup() {
     rm -f $KEYRING
 }
@@ -232,6 +262,8 @@ recreate_pools
 test_volumes_access
 
 test_remove_self_managed_snapshots
+
+test_rbd_support
 
 delete_pools
 delete_users

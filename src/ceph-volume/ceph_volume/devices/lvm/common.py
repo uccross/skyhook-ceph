@@ -1,19 +1,18 @@
 from ceph_volume.util import arg_validators
-from ceph_volume import process
+from ceph_volume import process, conf
 from ceph_volume import terminal
 import argparse
 
 
 def rollback_osd(args, osd_id=None):
     """
-    When the process of creating or preparing fails, the OSD needs to be either
-    purged (ID fully removed) or destroyed (ID persists). This is important
-    because otherwise it would leave the ID around, which can cause confusion
-    if relying on the automatic (OSD.N + 1) behavior.
+    When the process of creating or preparing fails, the OSD needs to be
+    destroyed so that the ID cane be reused.  This is prevents leaving the ID
+    around as "used" on the monitor, which can cause confusion if expecting
+    sequential OSD IDs.
 
-    When the OSD id is specified in the command line explicitly (with
-    ``--osd-id``) , the the ID is then preserved with a soft removal (``ceph
-    osd destroy``), otherwise it is fully removed with ``purge``.
+    The usage of `destroy-new` allows this to be done without requiring the
+    admin keyring (otherwise needed for destroy and purge commands)
     """
     if not osd_id:
         # it means that it wasn't generated, so there is nothing to rollback here
@@ -22,20 +21,17 @@ def rollback_osd(args, osd_id=None):
     # once here, this is an error condition that needs to be rolled back
     terminal.error('Was unable to complete a new OSD, will rollback changes')
     osd_name = 'osd.%s'
-    if args.osd_id is None:
-        terminal.error('OSD will be fully purged from the cluster, because the ID was generated')
-        # the ID wasn't passed in explicitly, so make sure it is fully removed
-        process.run([
-            'ceph', 'osd', 'purge',
-            osd_name % osd_id,
-            '--yes-i-really-mean-it'])
-    else:
-        terminal.error('OSD will be destroyed, keeping the ID because it was provided with --osd-id')
-        # the ID was passed explicitly, so allow to re-use by using `destroy`
-        process.run([
-            'ceph', 'osd', 'destroy',
-            osd_name % args.osd_id,
-            '--yes-i-really-mean-it'])
+    bootstrap_keyring = '/var/lib/ceph/bootstrap-osd/%s.keyring' % conf.cluster
+    cmd = [
+        'ceph',
+        '--cluster', conf.cluster,
+        '--name', 'client.bootstrap-osd',
+        '--keyring', bootstrap_keyring,
+        'osd', 'purge-new', osd_name % osd_id,
+        '--yes-i-really-mean-it',
+    ]
+
+    process.run(cmd)
 
 
 def common_parser(prog, description):
@@ -56,8 +52,21 @@ def common_parser(prog, description):
     required_group.add_argument(
         '--data',
         required=True,
-        type=arg_validators.LVPath(),
+        type=arg_validators.ValidDevice(as_string=True),
         help='OSD data path. A physical device or logical volume',
+    )
+
+    required_group.add_argument(
+        '--data-size',
+        help='Size of data LV in case a device was passed in --data',
+        default=0,
+    )
+
+    required_group.add_argument(
+        '--data-slots',
+        help=('Intended number of slots on data device. The new OSD gets one'
+              'of those slots or 1/nth of the available capacity'),
+        default=1,
     )
 
     filestore_group.add_argument(
@@ -69,6 +78,12 @@ def common_parser(prog, description):
     filestore_group.add_argument(
         '--journal',
         help='(REQUIRED) A logical volume (vg_name/lv_name), or path to a device',
+    )
+
+    filestore_group.add_argument(
+        '--journal-size',
+        help='Size of journal LV in case a raw block device was passed in --journal',
+        default=0,
     )
 
     bluestore_group.add_argument(
@@ -84,9 +99,39 @@ def common_parser(prog, description):
     )
 
     bluestore_group.add_argument(
+        '--block.db-size',
+        dest='block_db_size',
+        help='Size of block.db LV in case device was passed in --block.db',
+        default=0,
+    )
+
+    required_group.add_argument(
+        '--block.db-slots',
+        dest='block_db_slots',
+        help=('Intended number of slots on db device. The new OSD gets one'
+              'of those slots or 1/nth of the available capacity'),
+        default=1,
+    )
+
+    bluestore_group.add_argument(
         '--block.wal',
         dest='block_wal',
         help='Path to bluestore block.wal logical volume or device',
+    )
+
+    bluestore_group.add_argument(
+        '--block.wal-size',
+        dest='block_wal_size',
+        help='Size of block.wal LV in case device was passed in --block.wal',
+        default=0,
+    )
+
+    required_group.add_argument(
+        '--block.wal-slots',
+        dest='block_wal_slots',
+        help=('Intended number of slots on wal device. The new OSD gets one'
+              'of those slots or 1/nth of the available capacity'),
+        default=1,
     )
 
     parser.add_argument(
@@ -97,6 +142,11 @@ def common_parser(prog, description):
     parser.add_argument(
         '--osd-fsid',
         help='Reuse an existing OSD fsid',
+    )
+
+    parser.add_argument(
+        '--cluster-fsid',
+        help='Specify the cluster fsid, useful when no ceph.conf is available',
     )
 
     parser.add_argument(

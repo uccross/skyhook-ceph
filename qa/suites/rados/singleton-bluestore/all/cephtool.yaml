@@ -26,8 +26,8 @@ tasks:
     - \(OSD_
     - \(PG_
     - \(SMALLER_PG_NUM\)
+    - \(SMALLER_PGP_NUM\)
     - \(CACHE_POOL_NO_HIT_SET\)
-    - erasure code profile property .ruleset-failure-domain. is no longer supported
     - \(CACHE_POOL_NEAR_FULL\)
     - \(FS_WITH_FAILED_MDS\)
     - \(FS_DEGRADED\)
@@ -36,6 +36,7 @@ tasks:
     - \(SMALLER_PGP_NUM\)
     - \(POOL_NEARFULL\)
     - \(POOL_APP_NOT_ENABLED\)
+    - \(AUTH_BAD_CAPS\)
 - workunit:
     clients:
       all:

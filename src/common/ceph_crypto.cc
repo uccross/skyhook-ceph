@@ -12,32 +12,23 @@
  *
  */
 
+#include "common/ceph_context.h"
 #include "common/config.h"
 #include "ceph_crypto.h"
 
-#ifdef USE_CRYPTOPP
-void ceph::crypto::init(CephContext *cct)
-{
-}
-
-void ceph::crypto::shutdown(bool)
-{
-}
-
-// nothing
-ceph::crypto::HMACSHA1::~HMACSHA1()
-{
-}
-
-ceph::crypto::HMACSHA256::~HMACSHA256()
-{
-}
-
-#elif defined(USE_NSS)
+#ifdef USE_NSS
 
 // for SECMOD_RestartModules()
 #include <secmod.h>
 #include <nspr.h>
+
+#endif /*USE_NSS*/
+
+#ifdef USE_OPENSSL
+#include <openssl/evp.h>
+#endif /*USE_OPENSSL*/
+
+#ifdef USE_NSS
 
 static pthread_mutex_t crypto_init_mutex = PTHREAD_MUTEX_INITIALIZER;
 static uint32_t crypto_refs = 0;
@@ -68,13 +59,13 @@ void ceph::crypto::init(CephContext *cct)
                                      SECMOD_DB, &init_params, flags);
   }
   pthread_mutex_unlock(&crypto_init_mutex);
-  assert(crypto_context != NULL);
+  ceph_assert_always(crypto_context != NULL);
 }
 
 void ceph::crypto::shutdown(bool shared)
 {
   pthread_mutex_lock(&crypto_init_mutex);
-  assert(crypto_refs > 0);
+  ceph_assert_always(crypto_refs > 0);
   if (--crypto_refs == 0) {
     NSS_ShutdownContext(crypto_context);
     if (!shared) {
@@ -86,7 +77,7 @@ void ceph::crypto::shutdown(bool shared)
   pthread_mutex_unlock(&crypto_init_mutex);
 }
 
-ceph::crypto::HMAC::~HMAC()
+ceph::crypto::nss::HMAC::~HMAC()
 {
   PK11_DestroyContext(ctx, PR_TRUE);
   PK11_FreeSymKey(symkey);
@@ -95,4 +86,56 @@ ceph::crypto::HMAC::~HMAC()
 
 #else
 # error "No supported crypto implementation found."
-#endif
+#endif /*USE_NSS*/
+
+#ifdef USE_OPENSSL
+
+ceph::crypto::ssl::OpenSSLDigest::OpenSSLDigest(const EVP_MD * _type)
+  : mpContext(EVP_MD_CTX_create())
+  , mpType(_type) {
+  this->Restart();
+}
+
+ceph::crypto::ssl::OpenSSLDigest::~OpenSSLDigest() {
+  EVP_MD_CTX_destroy(mpContext);
+}
+
+void ceph::crypto::ssl::OpenSSLDigest::Restart() {
+  EVP_DigestInit_ex(mpContext, mpType, NULL);
+}
+
+void ceph::crypto::ssl::OpenSSLDigest::Update(const unsigned char *input, size_t length) {
+  if (length) {
+    EVP_DigestUpdate(mpContext, const_cast<void *>(reinterpret_cast<const void *>(input)), length);
+  }
+}
+
+void ceph::crypto::ssl::OpenSSLDigest::Final(unsigned char *digest) {
+  unsigned int s;
+  EVP_DigestFinal_ex(mpContext, digest, &s);
+}
+#endif /*USE_OPENSSL*/
+
+
+void ceph::crypto::zeroize_for_security(void* const s, const size_t n) {
+#ifdef USE_OPENSSL
+  // NSS lacks its own cleaning procedure that would be resilient to
+  // dead-store-elimination of nowadays compilers [1]. To avoid writing
+  // our own security code, let's always use the OpenSSL's one.
+  // [1]: "NSS [3.27.1] does not have a reliable memory scrubbing
+  //      implementation since it either calls memset or uses the macro
+  //      PORT_Memset, which expands to memset"
+  // https://klevchen.ece.illinois.edu/pubs/yjoll-usesec17.pdf, page 11.
+  OPENSSL_cleanse(s, n);
+#else
+  // OpenSSL is available even when NSS is turned on. The performance-
+  // critical Cephx's signature crafting machinery already follows this
+  // assumption and uses OpenSSL directly (see src/auth/Crypto.cc).
+  // Also, in CMakeList.txt we explicitly require both NSS and OpenSSL:
+  //
+  //  find_package(NSS REQUIRED)
+  //  find_package(NSPR REQUIRED)
+  //  find_package(OpenSSL REQUIRED)
+# error "No supported crypto implementation found."
+#endif /*USE_OPENSSL*/
+}

@@ -6,6 +6,7 @@
 
 #include "common/Cond.h"
 #include "common/Mutex.h"
+#include "common/ceph_time.h"
 #include "include/Context.h"
 #include "include/utime.h"
 #include "include/rbd/librbd.hpp"
@@ -49,18 +50,16 @@ struct AioCompletion {
   void *complete_arg;
   rbd_completion_t rbd_comp;
   uint32_t pending_count;   ///< number of requests
-  uint32_t blockers;
   int ref;
   bool released;
   ImageCtx *ictx;
-  utime_t start_time;
+  coarse_mono_time start_time;
   aio_type_t aio_type;
 
   ReadResult read_result;
 
   AsyncOperation async_op;
 
-  uint64_t journal_tid;
   xlist<AioCompletion*>::item m_xlist_item;
   bool event_notify;
 
@@ -100,10 +99,9 @@ struct AioCompletion {
   AioCompletion() : lock("AioCompletion::lock", true, false),
                     state(AIO_STATE_PENDING), rval(0), complete_cb(NULL),
                     complete_arg(NULL), rbd_comp(NULL),
-                    pending_count(0), blockers(1),
-                    ref(1), released(false), ictx(NULL),
-                    aio_type(AIO_TYPE_NONE),
-                    journal_tid(0), m_xlist_item(this), event_notify(false) {
+                    pending_count(0), ref(1), released(false), ictx(NULL),
+                    aio_type(AIO_TYPE_NONE), m_xlist_item(this),
+                    event_notify(false) {
   }
 
   ~AioCompletion() {
@@ -123,7 +121,7 @@ struct AioCompletion {
   }
 
   void init_time(ImageCtx *i, aio_type_t t);
-  void start_op(bool ignore_type = false);
+  void start_op();
   void fail(int r);
 
   void complete();
@@ -136,13 +134,11 @@ struct AioCompletion {
   void set_request_count(uint32_t num);
   void add_request() {
     lock.Lock();
-    assert(pending_count > 0);
+    ceph_assert(pending_count > 0);
     lock.Unlock();
     get();
   }
   void complete_request(ssize_t r);
-
-  void associate_journal_event(uint64_t tid);
 
   bool is_complete();
 
@@ -150,13 +146,13 @@ struct AioCompletion {
 
   void get() {
     lock.Lock();
-    assert(ref > 0);
+    ceph_assert(ref > 0);
     ref++;
     lock.Unlock();
   }
   void release() {
     lock.Lock();
-    assert(!released);
+    ceph_assert(!released);
     released = true;
     put_unlock();
   }
@@ -165,36 +161,16 @@ struct AioCompletion {
     put_unlock();
   }
   void put_unlock() {
-    assert(ref > 0);
+    ceph_assert(ref > 0);
     int n = --ref;
     lock.Unlock();
     if (!n) {
-      if (ictx) {
-        if (event_notify) {
-          ictx->completed_reqs_lock.Lock();
-          m_xlist_item.remove_myself();
-          ictx->completed_reqs_lock.Unlock();
-        }
-        if (aio_type == AIO_TYPE_CLOSE ||
-            (aio_type == AIO_TYPE_OPEN && rval < 0)) {
-          delete ictx;
-        }
+      if (ictx != nullptr && event_notify) {
+        ictx->completed_reqs_lock.Lock();
+        m_xlist_item.remove_myself();
+        ictx->completed_reqs_lock.Unlock();
       }
       delete this;
-    }
-  }
-
-  void block() {
-    Mutex::Locker l(lock);
-    ++blockers;
-  }
-  void unblock() {
-    Mutex::Locker l(lock);
-    assert(blockers > 0);
-    --blockers;
-    if (pending_count == 0 && blockers == 0) {
-      finalize(rval);
-      complete();
     }
   }
 

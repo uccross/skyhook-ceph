@@ -1,3 +1,5 @@
+.. _adding-and-removing-monitors:
+
 ==========================
  Adding/Removing Monitors
 ==========================
@@ -5,6 +7,8 @@
 When you have a cluster up and running, you may add or remove monitors
 from the cluster at runtime. To bootstrap a monitor, see `Manual Deployment`_
 or `Monitor Bootstrap`_.
+
+.. _adding-monitors:
 
 Adding Monitors
 ===============
@@ -45,7 +49,7 @@ Deploy your Hardware
 If you are adding a new host when adding a new monitor,  see `Hardware
 Recommendations`_ for details on minimum recommendations for monitor hardware.
 To add a monitor host to your cluster, first make sure you have an up-to-date
-version of Linux installed (typically Ubuntu 14.04 or RHEL 7). 
+version of Linux installed (typically Ubuntu 16.04 or RHEL 7). 
 
 Add your monitor host to a rack in your cluster, connect it to the network
 and ensure that it has network connectivity.
@@ -102,7 +106,7 @@ on ``mon.a``).
 
 #. Retrieve the monitor map, where ``{tmp}`` is the path to 
    the retrieved monitor map, and ``{map-filename}`` is the name of the file 
-   containing the retrieved monitor monitor map. :: 
+   containing the retrieved monitor map. :: 
 
 	ceph mon getmap -o {tmp}/{map-filename}
 
@@ -115,12 +119,13 @@ on ``mon.a``).
 	
 
 #. Start the new monitor and it will automatically join the cluster.
-   The daemon needs to know which address to bind to, either via
-   ``--public-addr {ip:port}`` or by setting ``mon addr`` in the
-   appropriate section of ``ceph.conf``.  For example::
+   The daemon needs to know which address to bind to, via either the
+   ``--public-addr {ip}`` or ``--public-network {network}`` argument.
+   For example::
 
 	ceph-mon -i {mon-id} --public-addr {ip:port}
 
+.. _removing-monitors:
 
 Removing Monitors
 =================
@@ -301,7 +306,7 @@ networks  are unable to communicate.  Use the following procedure:
 
 #. Retrieve the monitor map, where ``{tmp}`` is the path to 
    the retrieved monitor map, and ``{filename}`` is the name of the file 
-   containing the retrieved monitor monitor map. :: 
+   containing the retrieved monitor map. :: 
 
 	ceph mon getmap -o {tmp}/{filename}
 
@@ -367,4 +372,4 @@ the monitors should operate successfully.
 
 .. _Manual Deployment: ../../../install/manual-deployment
 .. _Monitor Bootstrap: ../../../dev/mon-bootstrap
-.. _Paxos: http://en.wikipedia.org/wiki/Paxos_(computer_science)
+.. _Paxos: https://en.wikipedia.org/wiki/Paxos_(computer_science)

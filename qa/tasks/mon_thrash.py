@@ -156,7 +156,7 @@ class MonitorThrasher:
         Thrash the monitor specified.
         :param mon: monitor to thrash
         """
-        addr = self.ctx.ceph['ceph'].conf['mon.%s' % mon]['mon addr']
+        addr = self.ctx.ceph['ceph'].mons['mon.%s' % mon]
         self.log('thrashing mon.{id}@{addr} store'.format(id=mon, addr=addr))
         out = self.manager.raw_cluster_cmd('-m', addr, 'sync', 'force')
         j = json.loads(out)
@@ -324,7 +324,7 @@ def task(ctx, config):
         'mon_thrash task requires at least 3 monitors'
     log.info('Beginning mon_thrash...')
     first_mon = teuthology.get_first_mon(ctx, config)
-    (mon,) = ctx.cluster.only(first_mon).remotes.iterkeys()
+    (mon,) = ctx.cluster.only(first_mon).remotes.keys()
     manager = ceph_manager.CephManager(
         mon,
         ctx=ctx,

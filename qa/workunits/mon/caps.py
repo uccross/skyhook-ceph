@@ -238,10 +238,6 @@ def test_all():
         {
           'cmd':('mds getmap', '', 'r'),
           },
-        {
-          'cmd':('mds cluster_down', '', 'rw'),
-          'post':'mds cluster_up'
-          },
         ],
       'mon':[
         {
@@ -311,7 +307,7 @@ def test_all():
       print 'testing {m}/{c}'.format(m=module,c=cmd_cmd)
 
       # test
-      for good_bad in perms.iterkeys():
+      for good_bad in perms.keys():
         for (kind,lst) in perms[good_bad].iteritems():
           for (perm,_) in lst:
             cname = 'client.{gb}-{k}-{p}'.format(gb=good_bad,k=kind,p=perm)

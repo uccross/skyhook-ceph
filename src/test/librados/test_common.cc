@@ -44,7 +44,8 @@ int wait_for_healthy(rados_t *cluster)
     rados_buffer_free(outbuf);
 
     json_spirit::mValue root;
-    assert(json_spirit::read(out, root));
+    [[maybe_unused]] bool json_parse_success = json_spirit::read(out, root);
+    ceph_assert(json_parse_success);
     json_spirit::mObject root_obj = root.get_obj();
     json_spirit::mObject pgmap = root_obj["pgmap"].get_obj();
     json_spirit::mArray pgs_by_state = pgmap["pgs_by_state"].get_array();
@@ -122,14 +123,12 @@ std::string with_healthy_cluster(rados_t* cluster,
 {
   try {
     // Wait for 'creating/backfilling' to clear
-    int r = wait_for_healthy(cluster);
-    if (r != 0) {
+    if (int r = wait_for_healthy(cluster); r != 0) {
       throw pool_op_error{pool_name, "wait_for_healthy", r};
     }
     func();
     // Wait for 'creating/backfilling' to clear
-    r = wait_for_healthy(cluster);
-    if (r != 0) {
+    if (int r = wait_for_healthy(cluster); r != 0) {
       throw pool_op_error{pool_name, "wait_for_healthy", r};
     }
   } catch (const pool_op_error& e) {
@@ -145,9 +144,9 @@ std::string set_pg_num(
 {
   return with_healthy_cluster(cluster, pool_name, [&] {
     // Adjust pg_num
-      int r = rados_pool_set(cluster, pool_name, "pg_num",
-			     stringify(pg_num));
-      if (r != 0) {
+      if (int r = rados_pool_set(cluster, pool_name, "pg_num",
+				 stringify(pg_num));
+	  r != 0) {
 	throw pool_op_error{pool_name, "set_pg_num", r};
       }
   });
@@ -158,9 +157,9 @@ std::string set_pgp_num(
 {
   return with_healthy_cluster(cluster, pool_name, [&] {
     // Adjust pgp_num
-    int r = rados_pool_set(cluster, pool_name, "pgp_num",
-			   stringify(pgp_num));
-    if (r != 0) {
+    if (int r = rados_pool_set(cluster, pool_name, "pgp_num",
+			       stringify(pgp_num));
+	r != 0) {
       throw pool_op_error{pool_name, "set_pgp_num", r};
     }
   });

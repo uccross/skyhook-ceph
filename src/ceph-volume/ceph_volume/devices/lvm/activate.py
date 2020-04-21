@@ -3,7 +3,7 @@ import argparse
 import logging
 import os
 from textwrap import dedent
-from ceph_volume import process, conf, decorators, terminal
+from ceph_volume import process, conf, decorators, terminal, __release__, configuration
 from ceph_volume.util import system, disk
 from ceph_volume.util import prepare as prepare_utils
 from ceph_volume.util import encryption as encryption_utils
@@ -24,14 +24,15 @@ def activate_filestore(lvs, no_systemd=False):
     is_vdo = osd_lv.tags.get('ceph.vdo', '0')
 
     osd_id = osd_lv.tags['ceph.osd_id']
-    conf.cluster = osd_lv.tags['ceph.cluster_name']
+    configuration.load_ceph_conf_path(osd_lv.tags['ceph.cluster_name'])
+    configuration.load()
     # it may have a volume with a journal
     osd_journal_lv = lvs.get(lv_tags={'ceph.type': 'journal'})
     # TODO: add sensible error reporting if this is ever the case
     # blow up with a KeyError if this doesn't exist
     osd_fsid = osd_lv.tags['ceph.osd_fsid']
     if not osd_journal_lv:
-        # must be a disk partition, by quering blkid by the uuid we are ensuring that the
+        # must be a disk partition, by querying blkid by the uuid we are ensuring that the
         # device path is always correct
         journal_uuid = osd_lv.tags['ceph.journal_uuid']
         osd_journal = disk.get_device_from_partuuid(journal_uuid)
@@ -58,9 +59,13 @@ def activate_filestore(lvs, no_systemd=False):
         source = osd_lv.lv_path
 
     # mount the osd
+    source = osd_lv.lv_path
     destination = '/var/lib/ceph/osd/%s-%s' % (conf.cluster, osd_id)
     if not system.device_is_mounted(source, destination=destination):
         prepare_utils.mount_osd(source, osd_id, is_vdo=is_vdo)
+
+    # ensure that the OSD destination is always chowned properly
+    system.chown(destination)
 
     # always re-do the symlink regardless if it exists, so that the journal
     # device path that may have changed can be mapped correctly every time
@@ -73,6 +78,9 @@ def activate_filestore(lvs, no_systemd=False):
     if no_systemd is False:
         # enable the ceph-volume unit for this OSD
         systemctl.enable_volume(osd_id, osd_fsid, 'lvm')
+
+        # enable the OSD
+        systemctl.enable_osd(osd_id)
 
         # start the OSD
         systemctl.start_osd(osd_id)
@@ -96,20 +104,22 @@ def get_osd_device_path(osd_lv, lvs, device_type, dmcrypt_secret=None):
     if not device_uuid:
         return None
 
-    device_lv = lvs.get(lv_uuid=device_uuid)
+    device_lv = lvs.get(lv_tags={'ceph.type': device_type})
     if device_lv:
         if is_encrypted:
             encryption_utils.luks_open(dmcrypt_secret, device_lv.lv_path, device_uuid)
             return '/dev/mapper/%s' % device_uuid
         return device_lv.lv_path
-    else:
-        # this could be a regular device, so query it with blkid
-        physical_device = disk.get_device_from_partuuid(device_uuid)
-        if physical_device and is_encrypted:
+
+    # this could be a regular device, so query it with blkid
+    physical_device = disk.get_device_from_partuuid(device_uuid)
+    if physical_device:
+        if is_encrypted:
             encryption_utils.luks_open(dmcrypt_secret, physical_device, device_uuid)
             return '/dev/mapper/%s' % device_uuid
-        return physical_device or None
-    return None
+        return physical_device
+
+    raise RuntimeError('could not find %s with uuid %s' % (device_type, device_uuid))
 
 
 def activate_bluestore(lvs, no_systemd=False):
@@ -147,11 +157,20 @@ def activate_bluestore(lvs, no_systemd=False):
     db_device_path = get_osd_device_path(osd_lv, lvs, 'db', dmcrypt_secret=dmcrypt_secret)
     wal_device_path = get_osd_device_path(osd_lv, lvs, 'wal', dmcrypt_secret=dmcrypt_secret)
 
-    # Once symlinks are removed, the osd dir can be 'primed again.
-    process.run([
+    # Once symlinks are removed, the osd dir can be 'primed again. chown first,
+    # regardless of what currently exists so that ``prime-osd-dir`` can succeed
+    # even if permissions are somehow messed up
+    system.chown(osd_path)
+    prime_command = [
         'ceph-bluestore-tool', '--cluster=%s' % conf.cluster,
         'prime-osd-dir', '--dev', osd_lv_path,
-        '--path', osd_path])
+        '--path', osd_path]
+
+    if __release__ != "luminous":
+        # mon-config changes are not available in Luminous
+        prime_command.append('--no-mon-config')
+
+    process.run(prime_command)
     # always re-do the symlink regardless if it exists, so that the block,
     # block.wal, and block.db devices that may have changed can be mapped
     # correctly every time
@@ -172,6 +191,9 @@ def activate_bluestore(lvs, no_systemd=False):
     if no_systemd is False:
         # enable the ceph-volume unit for this OSD
         systemctl.enable_volume(osd_id, osd_fsid, 'lvm')
+
+        # enable the OSD
+        systemctl.enable_osd(osd_id)
 
         # start the OSD
         systemctl.start_osd(osd_id)
@@ -227,7 +249,7 @@ class Activate(object):
         elif osd_fsid and not osd_id:
             lvs.filter(lv_tags={'ceph.osd_fsid': osd_fsid})
         if not lvs:
-            raise RuntimeError('could not find osd.%s with fsid %s' % (osd_id, osd_fsid))
+            raise RuntimeError('could not find osd.%s with osd_fsid %s' % (osd_id, osd_fsid))
         # This argument is only available when passed in directly or via
         # systemd, not when ``create`` is being used
         if getattr(args, 'auto_detect_objectstore', False):
@@ -237,9 +259,9 @@ class Activate(object):
                 has_journal = lv.tags.get('ceph.journal_uuid')
                 if has_journal:
                     logger.info('found a journal associated with the OSD, assuming filestore')
-                    return activate_filestore(lvs)
+                    return activate_filestore(lvs, no_systemd=args.no_systemd)
             logger.info('unable to find a journal associated with the OSD, assuming bluestore')
-            return activate_bluestore(lvs)
+            return activate_bluestore(lvs, no_systemd=args.no_systemd)
         if args.bluestore:
             activate_bluestore(lvs, no_systemd=args.no_systemd)
         elif args.filestore:

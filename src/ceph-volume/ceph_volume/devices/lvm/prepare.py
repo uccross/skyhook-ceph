@@ -1,7 +1,6 @@
 from __future__ import print_function
 import json
 import logging
-import uuid
 from textwrap import dedent
 from ceph_volume.util import prepare as prepare_utils
 from ceph_volume.util import encryption as encryption_utils
@@ -47,6 +46,7 @@ def prepare_filestore(device, journal, secrets, tags, osd_id, fsid):
     :param fsid: The OSD fsid, also known as the OSD UUID
     """
     cephx_secret = secrets.get('cephx_secret', prepare_utils.create_key())
+    json_secrets = json.dumps(secrets)
 
     # encryption-only operations
     if secrets.get('dmcrypt_key'):
@@ -69,7 +69,7 @@ def prepare_filestore(device, journal, secrets, tags, osd_id, fsid):
     # get the latest monmap
     prepare_utils.get_monmap(osd_id)
     # prepare the osd filesystem
-    prepare_utils.osd_mkfs_filestore(osd_id, fsid)
+    prepare_utils.osd_mkfs_filestore(osd_id, fsid, cephx_secret)
     # write the OSD keyring if it doesn't exist already
     prepare_utils.write_keyring(osd_id, cephx_secret)
     if secrets.get('dmcrypt_key'):
@@ -144,13 +144,14 @@ class Prepare(object):
         :param argument: The command-line value that will need to be split to
                          retrieve the actual lv
         """
+        #TODO is this efficient?
         try:
             vg_name, lv_name = argument.split('/')
         except (ValueError, AttributeError):
             return None
         return api.get_lv(lv_name=lv_name, vg_name=vg_name)
 
-    def setup_device(self, device_type, device_name, tags):
+    def setup_device(self, device_type, device_name, tags, size):
         """
         Check if ``device`` is an lv, if so, set the tags, making sure to
         update the tags with the lv_uuid and lv_path which the incoming tags
@@ -170,6 +171,24 @@ class Prepare(object):
             tags['ceph.%s_uuid' % device_type] = uuid
             tags['ceph.%s_device' % device_type] = path
             lv.set_tags(tags)
+        elif disk.is_device(device_name):
+            # We got a disk, create an lv
+            lv_type = "osd-{}".format(device_type)
+            uuid = system.generate_uuid()
+            tags['ceph.{}_uuid'.format(device_type)] = uuid
+            kwargs = {
+                'device': device_name,
+                'tags': tags,
+            }
+            if size != 0:
+                kwargs['size'] = disk.Size.parse(size)
+            lv = api.create_lv(
+                lv_type,
+                uuid,
+                **kwargs)
+            path = lv.lv_path
+            tags['ceph.{}_device'.format(device_type)] = path
+            lv.set_tags(tags)
         else:
             # otherwise assume this is a regular disk partition
             uuid = self.get_ptuuid(device_name)
@@ -178,7 +197,7 @@ class Prepare(object):
             tags['ceph.%s_device' % device_type] = path
         return path, uuid, tags
 
-    def prepare_device(self, arg, device_type, cluster_fsid, osd_fsid):
+    def prepare_data_device(self, device_type, osd_uuid):
         """
         Check if ``arg`` is a device or partition to create an LV out of it
         with a distinct volume group name, assigning LV tags on it and
@@ -187,62 +206,85 @@ class Prepare(object):
 
         :param arg: The value of ``--data`` when parsing args
         :param device_type: Usually, either ``data`` or ``block`` (filestore vs. bluestore)
-        :param cluster_fsid: The cluster fsid/uuid
-        :param osd_fsid: The OSD fsid/uuid
+        :param osd_uuid: The OSD uuid
         """
-        if disk.is_partition(arg) or disk.is_device(arg):
+        device = self.args.data
+        if disk.is_partition(device) or disk.is_device(device):
             # we must create a vg, and then a single lv
-            vg_name = "ceph-%s" % str(uuid.uuid4())
-            api.create_vg(vg_name, arg)
-            lv_name = "osd-%s-%s" % (device_type, osd_fsid)
+            lv_name_prefix = "osd-{}".format(device_type)
+            kwargs = {'device': device,
+                      'tags': {'ceph.type': device_type},
+                     }
+            logger.debug('data device size: {}'.format(self.args.data_size))
+            if self.args.data_size != 0:
+                kwargs['size'] = disk.Size.parse(self.args.data_size)
             return api.create_lv(
-                lv_name,
-                vg_name,  # the volume group
-                tags={'ceph.type': device_type})
+                lv_name_prefix,
+                osd_uuid,
+                **kwargs)
         else:
             error = [
-                'Cannot use device (%s).' % arg,
+                'Cannot use device ({}).'.format(device),
                 'A vg/lv path or an existing device is needed']
             raise RuntimeError(' '.join(error))
 
-        raise RuntimeError('no data logical volume found with: %s' % arg)
+        raise RuntimeError('no data logical volume found with: {}'.format(device))
 
-    def safe_prepare(self, args):
+    def safe_prepare(self, args=None):
         """
         An intermediate step between `main()` and `prepare()` so that we can
         capture the `self.osd_id` in case we need to rollback
+
+        :param args: Injected args, usually from `lvm create` which compounds
+                     both `prepare` and `create`
         """
+        if args is not None:
+            self.args = args
+        if api.is_ceph_device(self.get_lv(self.args.data)):
+            logger.info("device {} is already used".format(self.args.data))
+            raise RuntimeError("skipping {}, it is already prepared".format(self.args.data))
         try:
-            self.prepare(args)
+            self.prepare()
         except Exception:
             logger.exception('lvm prepare was unable to complete')
             logger.info('will rollback OSD ID creation')
-            rollback_osd(args, self.osd_id)
+            rollback_osd(self.args, self.osd_id)
             raise
-        terminal.success("ceph-volume lvm prepare successful for: %s" % args.data)
+        terminal.success("ceph-volume lvm prepare successful for: %s" % self.args.data)
+
+    def get_cluster_fsid(self):
+        """
+        Allows using --cluster-fsid as an argument, but can fallback to reading
+        from ceph.conf if that is unset (the default behavior).
+        """
+        if self.args.cluster_fsid:
+            return self.args.cluster_fsid
+        else:
+            return conf.ceph.get('global', 'fsid')
 
     @decorators.needs_root
-    def prepare(self, args):
+    def prepare(self):
         # FIXME we don't allow re-using a keyring, we always generate one for the
         # OSD, this needs to be fixed. This could either be a file (!) or a string
         # (!!) or some flags that we would need to compound into a dict so that we
         # can convert to JSON (!!!)
         secrets = {'cephx_secret': prepare_utils.create_key()}
         cephx_lockbox_secret = ''
-        encrypted = 1 if args.dmcrypt else 0
+        encrypted = 1 if self.args.dmcrypt else 0
         cephx_lockbox_secret = '' if not encrypted else prepare_utils.create_key()
 
         if encrypted:
             secrets['dmcrypt_key'] = encryption_utils.create_dmcrypt_key()
             secrets['cephx_lockbox_secret'] = cephx_lockbox_secret
 
-        cluster_fsid = conf.ceph.get('global', 'fsid')
-        osd_fsid = args.osd_fsid or system.generate_uuid()
-        crush_device_class = args.crush_device_class
+        cluster_fsid = self.get_cluster_fsid()
+
+        osd_fsid = self.args.osd_fsid or system.generate_uuid()
+        crush_device_class = self.args.crush_device_class
         if crush_device_class:
             secrets['crush_device_class'] = crush_device_class
         # reuse a given ID if it exists, otherwise create a new ID
-        self.osd_id = prepare_utils.create_id(osd_fsid, json.dumps(secrets), osd_id=args.osd_id)
+        self.osd_id = prepare_utils.create_id(osd_fsid, json.dumps(secrets), osd_id=self.args.osd_id)
         tags = {
             'ceph.osd_fsid': osd_fsid,
             'ceph.osd_id': self.osd_id,
@@ -250,13 +292,15 @@ class Prepare(object):
             'ceph.cluster_name': conf.cluster,
             'ceph.crush_device_class': crush_device_class,
         }
-        if args.filestore:
-            if not args.journal:
+        if self.args.filestore:
+            #TODO: allow auto creation of journal on passed device, only works
+            # when physical device is passed, not LV
+            if not self.args.journal:
                 raise RuntimeError('--journal is required when using --filestore')
 
-            data_lv = self.get_lv(args.data)
+            data_lv = self.get_lv(self.args.data)
             if not data_lv:
-                data_lv = self.prepare_device(args.data, 'data', cluster_fsid, osd_fsid)
+                data_lv = self.prepare_data_device('data', osd_fsid)
 
             tags['ceph.data_device'] = data_lv.lv_path
             tags['ceph.data_uuid'] = data_lv.lv_uuid
@@ -264,7 +308,8 @@ class Prepare(object):
             tags['ceph.encrypted'] = encrypted
             tags['ceph.vdo'] = api.is_vdo(data_lv.lv_path)
 
-            journal_device, journal_uuid, tags = self.setup_device('journal', args.journal, tags)
+            journal_device, journal_uuid, tags = self.setup_device(
+                'journal', self.args.journal, tags, self.args.journal_size)
 
             tags['ceph.type'] = 'data'
             data_lv.set_tags(tags)
@@ -277,10 +322,10 @@ class Prepare(object):
                 self.osd_id,
                 osd_fsid,
             )
-        elif args.bluestore:
-            block_lv = self.get_lv(args.data)
+        elif self.args.bluestore:
+            block_lv = self.get_lv(self.args.data)
             if not block_lv:
-                block_lv = self.prepare_device(args.data, 'block', cluster_fsid, osd_fsid)
+                block_lv = self.prepare_data_device('block', osd_fsid)
 
             tags['ceph.block_device'] = block_lv.lv_path
             tags['ceph.block_uuid'] = block_lv.lv_uuid
@@ -288,8 +333,10 @@ class Prepare(object):
             tags['ceph.encrypted'] = encrypted
             tags['ceph.vdo'] = api.is_vdo(block_lv.lv_path)
 
-            wal_device, wal_uuid, tags = self.setup_device('wal', args.block_wal, tags)
-            db_device, db_uuid, tags = self.setup_device('db', args.block_db, tags)
+            wal_device, wal_uuid, tags = self.setup_device(
+                'wal', self.args.block_wal, tags, self.args.block_wal_size)
+            db_device, db_uuid, tags = self.setup_device(
+                'db', self.args.block_db, tags, self.args.block_db_size)
 
             tags['ceph.type'] = 'block'
             block_lv.set_tags(tags)
@@ -314,43 +361,21 @@ class Prepare(object):
         Once the OSD is ready, an ad-hoc systemd unit will be enabled so that
         it can later get activated and the OSD daemon can get started.
 
-        Most basic Usage looks like (journal will be collocated from the same volume group):
-
-            ceph-volume lvm prepare --data {volume group name}
-
         Encryption is supported via dmcrypt and the --dmcrypt flag.
 
-        Example calls for supported scenarios:
+        Existing logical volume (lv):
 
-        Dedicated volume group for Journal(s)
-        -------------------------------------
+            ceph-volume lvm prepare --data {vg/lv}
 
-          Existing logical volume (lv) or device:
+        Existing block device (a logical volume will be created):
 
-              ceph-volume lvm prepare --filestore --data {vg/lv} --journal /path/to/device
+            ceph-volume lvm prepare --data /path/to/device
 
-          Or:
+        Optionally, can consume db and wal devices, partitions or logical
+        volumes. A device will get a logical volume, partitions and existing
+        logical volumes will be used as is:
 
-              ceph-volume lvm prepare --filestore --data {vg/lv} --journal {vg/lv}
-
-          Existing block device, that will be made a group and logical volume:
-
-              ceph-volume lvm prepare --filestore --data /path/to/device --journal {vg/lv}
-
-        Bluestore
-        ---------
-
-          Existing logical volume (lv):
-
-              ceph-volume lvm prepare --bluestore --data {vg/lv}
-
-          Existing block device, that will be made a group and logical volume:
-
-              ceph-volume lvm prepare --bluestore --data /path/to/device
-
-          Optionally, can consume db and wal devices or logical volumes:
-
-              ceph-volume lvm prepare --bluestore --data {vg/lv} --block.wal {device} --block-db {vg/lv}
+            ceph-volume lvm prepare --data {vg/lv} --block.wal {partition} --block.db {/path/to/device}
         """)
         parser = prepare_parser(
             prog='ceph-volume lvm prepare',
@@ -360,9 +385,14 @@ class Prepare(object):
             print(sub_command_help)
             return
         exclude_group_options(parser, argv=self.argv, groups=['filestore', 'bluestore'])
-        args = parser.parse_args(self.argv)
+        self.args = parser.parse_args(self.argv)
+        # the unfortunate mix of one superset for both filestore and bluestore
+        # makes this validation cumbersome
+        if self.args.filestore:
+            if not self.args.journal:
+                raise SystemExit('--journal is required when using --filestore')
         # Default to bluestore here since defaulting it in add_argument may
         # cause both to be True
-        if not args.bluestore and not args.filestore:
-            args.bluestore = True
-        self.safe_prepare(args)
+        if not self.args.bluestore and not self.args.filestore:
+            self.args.bluestore = True
+        self.safe_prepare()

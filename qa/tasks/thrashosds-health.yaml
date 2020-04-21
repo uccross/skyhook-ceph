@@ -9,6 +9,7 @@ overrides:
       - \(CACHE_POOL_
       - \(SMALLER_PGP_NUM\)
       - \(OBJECT_
+      - \(SLOW_OPS\)
       - \(REQUEST_SLOW\)
       - \(TOO_FEW_PGS\)
-      - \(MON_DOWN\)
+      - slow request

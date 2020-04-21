@@ -42,9 +42,10 @@ to Ceph clients.
 
 The cache tiering agent handles the migration of data between the cache tier 
 and the backing storage tier automatically. However, admins have the ability to
-configure how this migration takes place. There are two main scenarios: 
+configure how this migration takes place by setting the ``cache-mode``. There are
+two main scenarios:
 
-- **Writeback Mode:** When admins configure tiers with ``writeback`` mode, Ceph
+- **writeback** mode: When admins configure tiers with ``writeback`` mode, Ceph
   clients write data to the cache tier and receive an ACK from the cache tier.
   In time, the data written to the cache tier migrates to the storage tier
   and gets flushed from the cache tier. Conceptually, the cache tier is 
@@ -55,12 +56,25 @@ configure how this migration takes place. There are two main scenarios:
   data becomes inactive. This is ideal for mutable data (e.g., photo/video 
   editing, transactional data, etc.).
 
-- **Read-proxy Mode:** This mode will use any objects that already
+- **readproxy** mode: This mode will use any objects that already
   exist in the cache tier, but if an object is not present in the
   cache the request will be proxied to the base tier.  This is useful
   for transitioning from ``writeback`` mode to a disabled cache as it
   allows the workload to function properly while the cache is drained,
   without adding any new objects to the cache.
+
+Other cache modes are:
+
+- **readonly** promotes objects to the cache on read operations only; write
+  operations are forwarded to the base tier. This mode is intended for
+  read-only workloads that do not require consistency to be enforced by the
+  storage system. (**Warning**: when objects are updated in the base tier,
+  Ceph makes **no** attempt to sync these updates to the corresponding objects
+  in the cache. Since this mode is considered experimental, a
+  ``--yes-i-really-mean-it`` option must be passed in order to enable it.)
+
+- **none** is used to completely disable caching.
+
 
 A word of caution
 =================
@@ -88,7 +102,7 @@ extreme caution before using this feature.
 
 * *librados object enumeration*: The librados-level object enumeration
   API is not meant to be coherent in the presence of the case.  If
-  your applicatoin is using librados directly and relies on object
+  your application is using librados directly and relies on object
   enumeration, cache tiering will probably not work as expected.
   (This is not a problem for RGW, RBD, or CephFS.)
 
@@ -235,8 +249,8 @@ For example::
 
 	ceph osd pool set hot-storage hit_set_type bloom
 
-The ``hit_set_count`` and ``hit_set_period`` define how much time each HitSet
-should cover, and how many such HitSets to store. ::
+The ``hit_set_count`` and ``hit_set_period`` define how many such HitSets to
+store, and how much time each HitSet should cover. ::
 
 	ceph osd pool set {cachepool} hit_set_count 12
 	ceph osd pool set {cachepool} hit_set_period 14400
@@ -415,14 +429,14 @@ that you do not lose any recent changes to objects in the cache before you
 disable and remove it.
 
 
-#. Change the cache mode to ``forward`` so that new and modified objects will 
+#. Change the cache mode to ``proxy`` so that new and modified objects will 
    flush to the backing storage pool. ::
 
-	ceph osd tier cache-mode {cachepool} forward
+	ceph osd tier cache-mode {cachepool} proxy
 
    For example:: 
 
-	ceph osd tier cache-mode hot-storage forward
+	ceph osd tier cache-mode hot-storage proxy
 
 
 #. Ensure that the cache pool has been flushed. This may take a few minutes::
@@ -455,7 +469,7 @@ disable and remove it.
 
 .. _Create a Pool: ../pools#create-a-pool
 .. _Pools - Set Pool Values: ../pools#set-pool-values
-.. _Placing Different Pools on Different OSDs: ../crush-map/#placing-different-pools-on-different-osds
-.. _Bloom Filter: http://en.wikipedia.org/wiki/Bloom_filter
+.. _Placing Different Pools on Different OSDs: ../crush-map-edits/#placing-different-pools-on-different-osds
+.. _Bloom Filter: https://en.wikipedia.org/wiki/Bloom_filter
 .. _CRUSH Maps: ../crush-map
 .. _Absolute Sizing: #absolute-sizing

@@ -19,10 +19,12 @@ public:
     RadosTestFixture::TearDown();
   }
 
-  journal::JournalRecorder *create_recorder(const std::string &oid,
-                                            const journal::JournalMetadataPtr &metadata) {
+  journal::JournalRecorder *create_recorder(
+      const std::string &oid, const journal::JournalMetadataPtr &metadata) {
     journal::JournalRecorder *recorder(new journal::JournalRecorder(
-      m_ioctx, oid + ".", metadata, 0, std::numeric_limits<uint32_t>::max(), 0));
+        m_ioctx, oid + ".", metadata, 0));
+    recorder->set_append_batch_options(0, std::numeric_limits<uint32_t>::max(),
+                                       0);
     m_recorders.push_back(recorder);
     return recorder;
   }

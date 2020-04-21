@@ -6,6 +6,7 @@
 
 #include "include/int_types.h"
 #include "include/rados/librados.hpp"
+#include "librbd/exclusive_lock/Policy.h"
 #include "gmock/gmock.h"
 
 class Context;
@@ -18,7 +19,7 @@ struct MockExclusiveLock {
   MOCK_METHOD2(init, void(uint64_t features, Context*));
   MOCK_METHOD1(shut_down, void(Context*));
 
-  MOCK_METHOD0(reacquire_lock, void());
+  MOCK_METHOD1(reacquire_lock, void(Context*));
   MOCK_METHOD1(try_acquire_lock, void(Context*));
 
   MOCK_METHOD1(block_requests, void(int));
@@ -27,10 +28,12 @@ struct MockExclusiveLock {
   MOCK_METHOD1(acquire_lock, void(Context *));
   MOCK_METHOD1(release_lock, void(Context *));
 
-  MOCK_METHOD0(accept_requests, bool());
+  MOCK_METHOD2(accept_request, bool(exclusive_lock::OperationRequestType,
+                                    int *));
   MOCK_METHOD0(accept_ops, bool());
+  MOCK_METHOD0(get_unlocked_op_error, int());
 
-  MOCK_METHOD0(start_op, Context*());
+  MOCK_METHOD1(start_op, Context*(int*));
 };
 
 } // namespace librbd

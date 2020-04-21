@@ -15,6 +15,7 @@
 #include <sys/file.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <limits.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -31,7 +32,7 @@
 #include "Fh.h"
 #include "ioctl.h"
 #include "common/config.h"
-#include "include/assert.h"
+#include "include/ceph_assert.h"
 #include "include/cephfs/ceph_statx.h"
 
 #include "fuse_ll.h"
@@ -42,7 +43,8 @@
 
 #define FINO_INO(x) ((x) & ((1ull<<48)-1ull))
 #define FINO_STAG(x) ((x) >> 48)
-#define MAKE_FINO(i,s) ((i) | ((s) << 48))
+#define MAKE_FINO(i,s) ((i) | ((int64_t)(s) << 48))
+#define STAG_MASK 0xffff
 
 #define MINORBITS	20
 #define MINORMASK	((1U << MINORBITS) - 1)
@@ -93,7 +95,7 @@ public:
   ceph::unordered_map<uint64_t,int> snap_stag_map;
   ceph::unordered_map<int,uint64_t> stag_snap_map;
 
-  pthread_key_t fuse_req_key;
+  pthread_key_t fuse_req_key = 0;
   void set_fuse_req(fuse_req_t);
   fuse_req_t get_fuse_req();
 
@@ -103,7 +105,7 @@ public:
 static int getgroups(fuse_req_t req, gid_t **sgids)
 {
 #if FUSE_VERSION >= FUSE_MAKE_VERSION(2, 8)
-  assert(sgids);
+  ceph_assert(sgids);
   int c = fuse_req_getgroups(req, 0, NULL);
   if (c < 0) {
     return c;
@@ -118,7 +120,7 @@ static int getgroups(fuse_req_t req, gid_t **sgids)
   }
   c = fuse_req_getgroups(req, c, gids);
   if (c < 0) {
-    delete gids;
+    delete[] gids;
   } else {
     *sgids = gids;
   }
@@ -129,7 +131,7 @@ static int getgroups(fuse_req_t req, gid_t **sgids)
 
 static void get_fuse_groups(UserPerm& perms, fuse_req_t req)
 {
-  if (g_conf->get_val<bool>("fuse_set_user_groups")) {
+  if (g_conf().get_val<bool>("fuse_set_user_groups")) {
     gid_t *gids = NULL;
     int count = getgroups(req, &gids);
 
@@ -141,6 +143,14 @@ static void get_fuse_groups(UserPerm& perms, fuse_req_t req)
     }
   }
 }
+
+#define GET_GROUPS(perms, req)	{				\
+  if (cfuse->client->cct->_conf->fuse_set_user_groups) {	\
+    gid_t *gids = NULL;						\
+    int count = getgroups(req, &gids);				\
+    perms.init_gids(gids, count);				\
+    perms.take_gids();						\
+  } }
 
 
 static CephFuse::Handle *fuse_ll_req_prepare(fuse_req_t req)
@@ -159,6 +169,15 @@ static void fuse_ll_lookup(fuse_req_t req, fuse_ino_t parent, const char *name)
   int r;
   UserPerm perms(ctx->uid, ctx->gid);
   get_fuse_groups(perms, req);
+
+  if (!i1)
+  {
+    r = cfuse->client->lookup_ino(parent, perms, &i1);
+    if (r < 0) {
+      fuse_reply_err(req, -r);
+      return;
+    }
+  }
 
   memset(&fe, 0, sizeof(fe));
   r = cfuse->client->ll_lookup(i1, name, &fe.attr, &i2, perms);
@@ -222,7 +241,7 @@ static void fuse_ll_setattr(fuse_req_t req, fuse_ino_t ino, struct stat *attr,
   if (to_set & FUSE_SET_ATTR_MTIME) mask |= CEPH_SETATTR_MTIME;
   if (to_set & FUSE_SET_ATTR_ATIME) mask |= CEPH_SETATTR_ATIME;
   if (to_set & FUSE_SET_ATTR_SIZE) mask |= CEPH_SETATTR_SIZE;
-#if !defined(DARWIN)
+#if !defined(__APPLE__)
   if (to_set & FUSE_SET_ATTR_MTIME_NOW) mask |= CEPH_SETATTR_MTIME_NOW;
   if (to_set & FUSE_SET_ATTR_ATIME_NOW) mask |= CEPH_SETATTR_ATIME_NOW;
 #endif
@@ -241,7 +260,7 @@ static void fuse_ll_setattr(fuse_req_t req, fuse_ino_t ino, struct stat *attr,
 static void fuse_ll_setxattr(fuse_req_t req, fuse_ino_t ino, const char *name,
 			     const char *value, size_t size, 
 			     int flags
-#if defined(DARWIN)
+#if defined(__APPLE__)
 			     ,uint32_t pos
 #endif
   )
@@ -280,7 +299,7 @@ static void fuse_ll_listxattr(fuse_req_t req, fuse_ino_t ino, size_t size)
 
 static void fuse_ll_getxattr(fuse_req_t req, fuse_ino_t ino, const char *name,
 			     size_t size
-#if defined(DARWIN)
+#if defined(__APPLE__)
 			     ,uint32_t position
 #endif
   )
@@ -400,11 +419,14 @@ static void fuse_ll_mkdir(fuse_req_t req, fuse_ino_t parent, const char *name,
   UserPerm perm(ctx->uid, ctx->gid);
   get_fuse_groups(perm, req);
 #ifdef HAVE_SYS_SYNCFS
+  auto fuse_multithreaded = cfuse->client->cct->_conf.get_val<bool>(
+    "fuse_multithreaded");
+  auto fuse_syncfs_on_mksnap = cfuse->client->cct->_conf.get_val<bool>(
+    "fuse_syncfs_on_mksnap");
   if (cfuse->fino_snap(parent) == CEPH_SNAPDIR &&
-      cfuse->client->cct->_conf->fuse_multithreaded &&
-      cfuse->client->cct->_conf->fuse_syncfs_on_mksnap) {
+      fuse_multithreaded && fuse_syncfs_on_mksnap) {
     int err = 0;
-    int fd = ::open(cfuse->mountpoint, O_RDONLY | O_DIRECTORY);
+    int fd = ::open(cfuse->mountpoint, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
     if (fd < 0) {
       err = errno;
     } else {
@@ -562,9 +584,13 @@ static void fuse_ll_open(fuse_req_t req, fuse_ino_t ino,
   if (r == 0) {
     fi->fh = (uint64_t)fh;
 #if FUSE_VERSION >= FUSE_MAKE_VERSION(2, 8)
-    if (cfuse->client->cct->_conf->fuse_disable_pagecache)
+    auto fuse_disable_pagecache = cfuse->client->cct->_conf.get_val<bool>(
+      "fuse_disable_pagecache");
+    auto fuse_use_invalidate_cb = cfuse->client->cct->_conf.get_val<bool>(
+      "fuse_use_invalidate_cb");
+    if (fuse_disable_pagecache)
       fi->direct_io = 1;
-    else if (cfuse->client->cct->_conf->fuse_use_invalidate_cb)
+    else if (fuse_use_invalidate_cb)
       fi->keep_cache = 1;
 #endif
     fuse_reply_open(req, fi);
@@ -639,7 +665,7 @@ static void fuse_ll_ioctl(fuse_req_t req, fuse_ino_t ino, int cmd, void *arg, st
 }
 #endif
 
-#if FUSE_VERSION > FUSE_MAKE_VERSION(2, 9)
+#if FUSE_VERSION >= FUSE_MAKE_VERSION(2, 9)
 
 static void fuse_ll_fallocate(fuse_req_t req, fuse_ino_t ino, int mode,
                               off_t offset, off_t length,
@@ -779,9 +805,13 @@ static void fuse_ll_create(fuse_req_t req, fuse_ino_t parent, const char *name,
     fi->fh = (uint64_t)fh;
     fe.ino = cfuse->make_fake_ino(fe.attr.st_ino, fe.attr.st_dev);
 #if FUSE_VERSION >= FUSE_MAKE_VERSION(2, 8)
-    if (cfuse->client->cct->_conf->fuse_disable_pagecache)
+    auto fuse_disable_pagecache = cfuse->client->cct->_conf.get_val<bool>(
+      "fuse_disable_pagecache");
+    auto fuse_use_invalidate_cb = cfuse->client->cct->_conf.get_val<bool>(
+      "fuse_use_invalidate_cb");
+    if (fuse_disable_pagecache)
       fi->direct_io = 1;
-    else if (cfuse->client->cct->_conf->fuse_use_invalidate_cb)
+    else if (fuse_use_invalidate_cb)
       fi->keep_cache = 1;
 #endif
     fuse_reply_create(req, &fe, fi);
@@ -830,8 +860,9 @@ static void fuse_ll_setlk(fuse_req_t req, fuse_ino_t ino,
   Fh *fh = reinterpret_cast<Fh*>(fi->fh);
 
   // must use multithread if operation may block
-  if (!cfuse->client->cct->_conf->fuse_multithreaded &&
-      sleep && lock->l_type != F_UNLCK) {
+  auto fuse_multithreaded = cfuse->client->cct->_conf.get_val<bool>(
+    "fuse_multithreaded");
+  if (!fuse_multithreaded && sleep && lock->l_type != F_UNLCK) {
     fuse_reply_err(req, EDEADLK);
     return;
   }
@@ -865,8 +896,9 @@ static void fuse_ll_flock(fuse_req_t req, fuse_ino_t ino,
   Fh *fh = (Fh*)fi->fh;
 
   // must use multithread if operation may block
-  if (!cfuse->client->cct->_conf->fuse_multithreaded &&
-      !(cmd & (LOCK_NB | LOCK_UN))) {
+  auto fuse_multithreaded = cfuse->client->cct->_conf.get_val<bool>(
+    "fuse_multithreaded");
+  if (!fuse_multithreaded && !(cmd & (LOCK_NB | LOCK_UN))) {
     fuse_reply_err(req, EDEADLK);
     return;
   }
@@ -876,7 +908,7 @@ static void fuse_ll_flock(fuse_req_t req, fuse_ino_t ino,
 }
 #endif
 
-#if !defined(DARWIN)
+#if !defined(__APPLE__)
 static mode_t umask_cb(void *handle)
 {
   CephFuse::Handle *cfuse = (CephFuse::Handle *)handle;
@@ -915,7 +947,7 @@ static int remount_cb(void *handle)
 {
   // used for trimming kernel dcache. when remounting a file system, linux kernel
   // trims all unused dentries in the file system
-  char cmd[1024];
+  char cmd[128+PATH_MAX];
   CephFuse::Handle *cfuse = (CephFuse::Handle *)handle;
   snprintf(cmd, sizeof(cmd), "mount -i -o remount %s", cfuse->mountpoint);
   int r = system(cmd);
@@ -931,13 +963,14 @@ static void do_init(void *data, fuse_conn_info *conn)
   CephFuse::Handle *cfuse = (CephFuse::Handle *)data;
   Client *client = cfuse->client;
 
-#if !defined(DARWIN)
-  if (!client->cct->_conf->fuse_default_permissions &&
-      client->ll_handle_umask()) {
+#if !defined(__APPLE__)
+  if (!client->fuse_default_permissions && client->ll_handle_umask()) {
     // apply umask in userspace if posix acl is enabled
     if(conn->capable & FUSE_CAP_DONT_MASK)
       conn->want |= FUSE_CAP_DONT_MASK;
   }
+  if(conn->capable & FUSE_CAP_EXPORT_SUPPORT)
+    conn->want |= FUSE_CAP_EXPORT_SUPPORT;
 #endif
 
   if (cfuse->fd_on_success) {
@@ -1009,7 +1042,7 @@ const static struct fuse_lowlevel_ops fuse_ll_oper = {
  forget_multi: 0,
  flock: fuse_ll_flock,
 #endif
-#if FUSE_VERSION > FUSE_MAKE_VERSION(2, 9)
+#if FUSE_VERSION >= FUSE_MAKE_VERSION(2, 9)
  fallocate: fuse_ll_fallocate
 #endif
 };
@@ -1066,25 +1099,45 @@ int CephFuse::Handle::init(int argc, const char *argv[])
   newargv[newargc++] = argv[0];
   newargv[newargc++] = "-f";  // stay in foreground
 
-  if (client->cct->_conf->fuse_allow_other) {
+  auto fuse_allow_other = client->cct->_conf.get_val<bool>(
+    "fuse_allow_other");
+  auto fuse_default_permissions = client->cct->_conf.get_val<bool>(
+    "fuse_default_permissions");
+  auto fuse_big_writes = client->cct->_conf.get_val<bool>(
+    "fuse_big_writes");
+  auto fuse_atomic_o_trunc = client->cct->_conf.get_val<bool>(
+    "fuse_atomic_o_trunc");
+  auto fuse_debug = client->cct->_conf.get_val<bool>(
+    "fuse_debug");
+  auto fuse_max_write = client->cct->_conf.get_val<Option::size_t>(
+    "fuse_max_write");
+
+  if (fuse_allow_other) {
     newargv[newargc++] = "-o";
     newargv[newargc++] = "allow_other";
   }
-  if (client->cct->_conf->fuse_default_permissions) {
+  if (fuse_default_permissions) {
     newargv[newargc++] = "-o";
     newargv[newargc++] = "default_permissions";
   }
 #if defined(__linux__)
-  if (client->cct->_conf->fuse_big_writes) {
+  if (fuse_big_writes) {
     newargv[newargc++] = "-o";
     newargv[newargc++] = "big_writes";
   }
-  if (client->cct->_conf->fuse_atomic_o_trunc) {
+  if (fuse_max_write > 0) {
+    char strsplice[65];
+    newargv[newargc++] = "-o";
+    newargv[newargc++] = strsplice;
+    sprintf(strsplice, "max_write=%zu", (size_t)fuse_max_write);
+    newargv[newargc++] = strsplice;
+  }
+  if (fuse_atomic_o_trunc) {
     newargv[newargc++] = "-o";
     newargv[newargc++] = "atomic_o_trunc";
   }
 #endif
-  if (client->cct->_conf->fuse_debug)
+  if (fuse_debug)
     newargv[newargc++] = "-d";
 
   for (int argctr = 1; argctr < argc; argctr++)
@@ -1101,7 +1154,7 @@ int CephFuse::Handle::init(int argc, const char *argv[])
     return EINVAL;
   }
 
-  assert(args.allocated);  // Checking fuse has realloc'd args so we can free newargv
+  ceph_assert(args.allocated);  // Checking fuse has realloc'd args so we can free newargv
   free(newargv);
   return 0;
 }
@@ -1132,13 +1185,14 @@ int CephFuse::Handle::start()
 
   struct client_callback_args args = {
     handle: this,
-    ino_cb: client->cct->_conf->fuse_use_invalidate_cb ? ino_invalidate_cb : NULL,
+    ino_cb: client->cct->_conf.get_val<bool>("fuse_use_invalidate_cb") ?
+      ino_invalidate_cb : NULL,
     dentry_cb: dentry_invalidate_cb,
     switch_intr_cb: switch_interrupt_cb,
 #if defined(__linux__)
     remount_cb: remount_cb,
 #endif
-#if !defined(DARWIN)
+#if !defined(__APPLE__)
     umask_cb: umask_cb,
 #endif
   };
@@ -1149,7 +1203,9 @@ int CephFuse::Handle::start()
 
 int CephFuse::Handle::loop()
 {
-  if (client->cct->_conf->fuse_multithreaded) {
+  auto fuse_multithreaded = client->cct->_conf.get_val<bool>(
+    "fuse_multithreaded");
+  if (fuse_multithreaded) {
     return fuse_session_loop_mt(se);
   } else {
     return fuse_session_loop(se);
@@ -1165,9 +1221,9 @@ uint64_t CephFuse::Handle::fino_snap(uint64_t fino)
     vinodeno_t vino  = client->map_faked_ino(fino);
     return vino.snapid;
   } else {
-    Mutex::Locker l(stag_lock);
+    std::lock_guard l(stag_lock);
     uint64_t stag = FINO_STAG(fino);
-    assert(stag_snap_map.count(stag));
+    ceph_assert(stag_snap_map.count(stag));
     return stag_snap_map[stag];
   }
 }
@@ -1202,14 +1258,36 @@ uint64_t CephFuse::Handle::make_fake_ino(inodeno_t ino, snapid_t snapid)
     if (snapid == CEPH_NOSNAP && ino == client->get_root_ino())
       return FUSE_ROOT_ID;
 
-    Mutex::Locker l(stag_lock);
-    uint64_t stag;
-    if (snap_stag_map.count(snapid) == 0) {
-      stag = ++last_stag;
-      snap_stag_map[snapid] = stag;
-      stag_snap_map[stag] = snapid;
-    } else
-      stag = snap_stag_map[snapid];
+    std::lock_guard l(stag_lock);
+    auto p = snap_stag_map.find(snapid);
+    if (p != snap_stag_map.end()) {
+      inodeno_t fino = MAKE_FINO(ino, p->second);
+      return fino;
+    }
+
+    int first = last_stag & STAG_MASK;
+    int stag =  (++last_stag) & STAG_MASK;
+    for (; stag != first; stag = (++last_stag) & STAG_MASK) {
+      if (stag == 0)
+	continue;
+
+      auto p = stag_snap_map.find(stag);
+      if (p == stag_snap_map.end()) {
+	snap_stag_map[snapid] = stag;
+	stag_snap_map[stag] = snapid;
+	break;
+      }
+
+      if (!client->ll_get_snap_ref(p->second)) {
+	snap_stag_map.erase(p->second);
+	snap_stag_map[snapid] = stag;
+	p->second = snapid;
+	break;
+      }
+    }
+    if (stag == first)
+      ceph_abort_msg("run out of stag");
+
     inodeno_t fino = MAKE_FINO(ino, stag);
     //cout << "make_fake_ino " << ino << "." << snapid << " -> " << fino << std::endl;
     return fino;

@@ -7,6 +7,7 @@ set(lib_mon_srcs
   PaxosService.cc
   OSDMonitor.cc
   MDSMonitor.cc
+  CommandHandler.cc
   FSCommands.cc
   MgrMonitor.cc
   MgrStatMonitor.cc
@@ -14,17 +15,21 @@ set(lib_mon_srcs
   MonmapMonitor.cc
   LogMonitor.cc
   AuthMonitor.cc
+  ConfigMap.cc
+  ConfigMonitor.cc
   Elector.cc
   HealthMonitor.cc
-  OldHealthMonitor.cc
-  DataHealthService.cc
-  PGMonitor.cc
-  PGMap.cc
   ConfigKeyService.cc
+  ../mds/MDSAuthCaps.cc
   ../mgr/mgr_commands.cc
-  ../osd/OSDCap.cc)
+  ../osd/OSDCap.cc
+  $<TARGET_OBJECTS:mgr_cap_obj>)
+
+if(HAVE_GSSAPI)
+  list(APPEND lib_mon_srcs
+    ${CMAKE_SOURCE_DIR}/src/auth/krb/KrbServiceHandler.cpp)
+endif()
+
 add_library(mon STATIC
-  ${lib_mon_srcs}
-  $<TARGET_OBJECTS:kv_objs>
-  $<TARGET_OBJECTS:heap_profiler_objs>)
-target_link_libraries(mon ${ALLOC_LIBS})
+  ${lib_mon_srcs})
+target_link_libraries(mon kv heap_profiler)

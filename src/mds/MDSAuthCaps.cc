@@ -12,7 +12,7 @@
  * 
  */
 
-#include <boost/utility/string_view.hpp>
+#include <string_view>
 
 #include <errno.h>
 #include <fcntl.h>
@@ -23,6 +23,7 @@
 
 #include "common/debug.h"
 #include "MDSAuthCaps.h"
+#include "include/ipaddr.h"
 
 #define dout_subsys ceph_subsys_mds
 
@@ -58,6 +59,7 @@ struct MDSCapParser : qi::grammar<Iterator, MDSAuthCaps()>
       lexeme[lit("\"") >> *(char_ - '"') >> '"'] | 
       lexeme[lit("'") >> *(char_ - '\'') >> '\''];
     unquoted_path %= +char_("a-zA-Z0-9_./-");
+    network_str %= +char_("/.:a-fA-F0-9][");
 
     // match := [path=<path>] [uid=<uid> [gids=<gid>[,<gid>...]]
     path %= (spaces >> lit("path") >> lit('=') >> (quoted_path | unquoted_path));
@@ -69,23 +71,31 @@ struct MDSCapParser : qi::grammar<Iterator, MDSAuthCaps()>
 	     (path >> uid >> gidlist)[_val = phoenix::construct<MDSCapMatch>(_1, _2, _3)] |
              (path)[_val = phoenix::construct<MDSCapMatch>(_1)]);
 
-    // capspec = * | r[w]
+    // capspec = * | r[w][p][s]
     capspec = spaces >> (
-        lit("*")[_val = MDSCapSpec(true, true, true, true)]
+        lit("*")[_val = MDSCapSpec(MDSCapSpec::ALL)]
         |
-        (lit("rwp"))[_val = MDSCapSpec(true, true, false, true)]
+        lit("all")[_val = MDSCapSpec(MDSCapSpec::ALL)]
         |
-        (lit("rw"))[_val = MDSCapSpec(true, true, false, false)]
+        (lit("rwps"))[_val = MDSCapSpec(MDSCapSpec::RWPS)]
         |
-        (lit("r"))[_val = MDSCapSpec(true, false, false, false)]
+        (lit("rwp"))[_val = MDSCapSpec(MDSCapSpec::RWP)]
+        |
+        (lit("rws"))[_val = MDSCapSpec(MDSCapSpec::RWS)]
+        |
+        (lit("rw"))[_val = MDSCapSpec(MDSCapSpec::RW)]
+        |
+        (lit("r"))[_val = MDSCapSpec(MDSCapSpec::READ)]
         );
 
-    grant = lit("allow") >> (capspec >> match)[_val = phoenix::construct<MDSCapGrant>(_1, _2)];
+    grant = lit("allow") >> (capspec >> match >>
+			     -(spaces >> lit("network") >> spaces >> network_str))
+      [_val = phoenix::construct<MDSCapGrant>(_1, _2, _3)];
     grants %= (grant % (*lit(' ') >> (lit(';') | lit(',')) >> *lit(' ')));
     mdscaps = grants  [_val = phoenix::construct<MDSAuthCaps>(_1)]; 
   }
   qi::rule<Iterator> spaces;
-  qi::rule<Iterator, string()> quoted_path, unquoted_path;
+  qi::rule<Iterator, string()> quoted_path, unquoted_path, network_str;
   qi::rule<Iterator, MDSCapSpec()> capspec;
   qi::rule<Iterator, string()> path;
   qi::rule<Iterator, uint32_t()> uid;
@@ -109,7 +119,7 @@ void MDSCapMatch::normalize_path()
   // drop ..
 }
 
-bool MDSCapMatch::match(boost::string_view target_path,
+bool MDSCapMatch::match(std::string_view target_path,
 			const int caller_uid,
 			const int caller_gid,
 			const vector<uint64_t> *caller_gid_list) const
@@ -141,7 +151,7 @@ bool MDSCapMatch::match(boost::string_view target_path,
   return true;
 }
 
-bool MDSCapMatch::match_path(boost::string_view target_path) const
+bool MDSCapMatch::match_path(std::string_view target_path) const
 {
   if (path.length()) {
     if (target_path.find(path) != 0)
@@ -157,11 +167,17 @@ bool MDSCapMatch::match_path(boost::string_view target_path) const
   return true;
 }
 
+void MDSCapGrant::parse_network()
+{
+  network_valid = ::parse_network(network.c_str(), &network_parsed,
+				  &network_prefix);
+}
+
 /**
  * Is the client *potentially* able to access this path?  Actual
  * permission will depend on uids/modes in the full is_capable.
  */
-bool MDSAuthCaps::path_capable(boost::string_view inode_path) const
+bool MDSAuthCaps::path_capable(std::string_view inode_path) const
 {
   for (const auto &i : grants) {
     if (i.match.match_path(inode_path)) {
@@ -179,13 +195,14 @@ bool MDSAuthCaps::path_capable(boost::string_view inode_path) const
  * This is true if any of the 'grant' clauses in the capability match the
  * requested path + op.
  */
-bool MDSAuthCaps::is_capable(boost::string_view inode_path,
+bool MDSAuthCaps::is_capable(std::string_view inode_path,
 			     uid_t inode_uid, gid_t inode_gid,
 			     unsigned inode_mode,
 			     uid_t caller_uid, gid_t caller_gid,
 			     const vector<uint64_t> *caller_gid_list,
 			     unsigned mask,
-			     uid_t new_uid, gid_t new_gid) const
+			     uid_t new_uid, gid_t new_gid,
+			     const entity_addr_t& addr) const
 {
   if (cct)
     ldout(cct, 10) << __func__ << " inode(path /" << inode_path
@@ -200,6 +217,13 @@ bool MDSAuthCaps::is_capable(boost::string_view inode_path,
   for (std::vector<MDSCapGrant>::const_iterator i = grants.begin();
        i != grants.end();
        ++i) {
+    if (i->network.size() &&
+	(!i->network_valid ||
+	 !network_contains(i->network_parsed,
+			   i->network_prefix,
+			   addr))) {
+      continue;
+    }
 
     if (i->match.match(inode_path, caller_uid, caller_gid, caller_gid_list) &&
 	i->spec.allows(mask & (MAY_READ|MAY_EXECUTE), mask & MAY_WRITE)) {
@@ -219,7 +243,13 @@ bool MDSAuthCaps::is_capable(boost::string_view inode_path,
 
       // Spec is non-allowing if caller asked for set pool but spec forbids it
       if (mask & MAY_SET_VXATTR) {
-        if (!i->spec.allows_set_vxattr()) {
+        if (!i->spec.allow_set_vxattr()) {
+          continue;
+        }
+      }
+
+      if (mask & MAY_SNAPSHOT) {
+        if (!i->spec.allow_snapshot()) {
           continue;
         }
       }
@@ -274,17 +304,17 @@ bool MDSAuthCaps::is_capable(boost::string_view inode_path,
 void MDSAuthCaps::set_allow_all()
 {
     grants.clear();
-    grants.push_back(MDSCapGrant(
-                       MDSCapSpec(true, true, true, true),
-                       MDSCapMatch()));
+    grants.push_back(MDSCapGrant(MDSCapSpec(MDSCapSpec::ALL), MDSCapMatch(),
+				 {}));
 }
 
-bool MDSAuthCaps::parse(CephContext *c, boost::string_view str, ostream *err)
+bool MDSAuthCaps::parse(CephContext *c, std::string_view str, ostream *err)
 {
   // Special case for legacy caps
   if (str == "allow") {
     grants.clear();
-    grants.push_back(MDSCapGrant(MDSCapSpec(true, true, false, true), MDSCapMatch()));
+    grants.push_back(MDSCapGrant(MDSCapSpec(MDSCapSpec::RWPS), MDSCapMatch(),
+				 {}));
     return true;
   }
 
@@ -297,6 +327,7 @@ bool MDSAuthCaps::parse(CephContext *c, boost::string_view str, ostream *err)
   if (r && iter == end) {
     for (auto& grant : grants) {
       std::sort(grant.match.gids.begin(), grant.match.gids.end());
+      grant.parse_network();
     }
     return true;
   } else {
@@ -304,8 +335,9 @@ bool MDSAuthCaps::parse(CephContext *c, boost::string_view str, ostream *err)
     grants.clear();
 
     if (err)
-      *err << "MDSAuthCaps parse failed, stopped at '" << std::string(iter, end)
-           << "' of '" << str << "'\n";
+      *err << "mds capability parse failed, stopped at '"
+	   << std::string(iter, end)
+           << "' of '" << str << "'";
     return false; 
   }
 }
@@ -351,14 +383,20 @@ ostream &operator<<(ostream &out, const MDSCapMatch &match)
 
 ostream &operator<<(ostream &out, const MDSCapSpec &spec)
 {
-  if (spec.any) {
+  if (spec.allow_all()) {
     out << "*";
   } else {
-    if (spec.read) {
+    if (spec.allow_read()) {
       out << "r";
     }
-    if (spec.write) {
+    if (spec.allow_write()) {
       out << "w";
+    }
+    if (spec.allow_set_vxattr()) {
+      out << "p";
+    }
+    if (spec.allow_snapshot()) {
+      out << "s";
     }
   }
 
@@ -373,7 +411,9 @@ ostream &operator<<(ostream &out, const MDSCapGrant &grant)
   if (!grant.match.is_match_all()) {
     out << " " << grant.match;
   }
-
+  if (grant.network.size()) {
+    out << " network " << grant.network;
+  }
   return out;
 }
 

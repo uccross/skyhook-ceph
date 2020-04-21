@@ -75,7 +75,7 @@ namespace {
     std::vector<ZPage*> pages;
     struct iovec* iovs;
 
-    ZPageSet(int n) {
+    explicit ZPageSet(int n) {
       pages.reserve(n);
       iovs = (struct iovec*) calloc(n, sizeof(struct iovec));
       for (int page_ix = 0; page_ix < n; ++page_ix) {
@@ -199,13 +199,13 @@ TEST(LibRGW, CREATE_BUCKET) {
 
 TEST(LibRGW, LOOKUP_BUCKET) {
   int ret = rgw_lookup(fs, fs->root_fh, bucket_name.c_str(), &bucket_fh,
-		      RGW_LOOKUP_FLAG_NONE);
+		       nullptr, 0, RGW_LOOKUP_FLAG_NONE);
   ASSERT_EQ(ret, 0);
 }
 
 TEST(LibRGW, LOOKUP_OBJECT) {
   int ret = rgw_lookup(fs, bucket_fh, object_name.c_str(), &object_fh,
-		       RGW_LOOKUP_FLAG_CREATE);
+		       nullptr, 0, RGW_LOOKUP_FLAG_CREATE);
   ASSERT_EQ(ret, 0);
 }
 
@@ -414,7 +414,7 @@ int main(int argc, char *argv[])
     }
   }
 
-  /* dont accidentally run as anonymous */
+  /* don't accidentally run as anonymous */
   if ((access_key == "") ||
       (secret_key == "")) {
     std::cout << argv[0] << " no AWS credentials, exiting" << std::endl;
