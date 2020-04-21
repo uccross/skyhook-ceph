@@ -278,8 +278,15 @@ else
     case "$ID" in
     debian|ubuntu|devuan)
         echo "Using apt-get to install dependencies"
+	# Add depdencies for Apache Arrow and Parquet (used by skyhookdm/libcls)
+        $SUDO apt-get install -y curl lsb-release apt-transport-https gnupg
+        curl https://dist.apache.org/repos/dist/dev/arrow/KEYS | $SUDO apt-key add -
+        $SUDO tee /etc/apt/sources.list.d/apache-arrow.list <<APT_LINE
+deb [arch=amd64] https://dl.bintray.com/apache/arrow/$(lsb_release --id --short | tr 'A-Z' 'a-z')/ $(lsb_release --codename --short) main
+deb-src https://dl.bintray.com/apache/arrow/$(lsb_release --id --short | tr 'A-Z' 'a-z')/ $(lsb_release --codename --short) main
+APT_LINE
         $SUDO apt-get install -y devscripts equivs
-        $SUDO apt-get install -y dpkg-dev
+        $SUDO apt-get install -y dpkg-dev gcc libarrow-dev libarrow15 libparquet-dev
         case "$VERSION" in
             *Trusty*)
                 ensure_decent_gcc_on_ubuntu 8 trusty
@@ -347,6 +354,18 @@ else
 		    $SUDO yum -y install --nogpgcheck https://dl.fedoraproject.org/pub/epel/epel-release-latest-$MAJOR_VERSION.noarch.rpm
                 $SUDO rpm --import /etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-$MAJOR_VERSION
                 $SUDO rm -f /etc/yum.repos.d/dl.fedoraproject.org*
+		# Add dependencies for Apache Arrow and Parquet (used by skyhookdm/libcls)
+                $SUDO tee /etc/yum.repos.d/Apache-Arrow.repo <<REPO
+[apache-arrow]
+name=Apache Arrow
+baseurl=https://dl.bintray.com/apache/arrow/centos/\$releasever/\$basearch/
+gpgcheck=1
+enabled=1
+gpgkey=https://dl.bintray.com/apache/arrow/centos/RPM-GPG-KEY-apache-arrow
+REPO
+		$SUDO yum install -y epel-release
+                $SUDO yum install -y --enablerepo=epel arrow-devel
+		$SUDO yum install -y --enablerepo=epel parquet-devel
                 if test $ID = centos -a $MAJOR_VERSION = 7 ; then
 		    $SUDO $yumdnf install -y python36-devel
 		    case "$ARCH" in
