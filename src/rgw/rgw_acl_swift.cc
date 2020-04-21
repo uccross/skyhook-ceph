@@ -14,7 +14,6 @@
 
 #define dout_subsys ceph_subsys_rgw
 
-using namespace std;
 
 #define SWIFT_PERM_READ  RGW_PERM_READ_OBJS
 #define SWIFT_PERM_WRITE RGW_PERM_WRITE_OBJS
@@ -107,7 +106,7 @@ static boost::optional<ACLGrant> referrer_to_grant(std::string url_spec,
 
     grant.set_referer(url_spec, is_negative ? 0 : perm);
     return grant;
-  } catch (std::out_of_range) {
+  } catch (const std::out_of_range&) {
     return boost::none;
   }
 }

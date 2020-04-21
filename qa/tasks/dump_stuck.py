@@ -13,7 +13,7 @@ log = logging.getLogger(__name__)
 
 def check_stuck(manager, num_inactive, num_unclean, num_stale, timeout=10):
     """
-    Do checks.  Make sure get_stuck_pgs return the right amout of information, then
+    Do checks.  Make sure get_stuck_pgs return the right amount of information, then
     extract health information from the raw_cluster_cmd and compare the results with
     values passed in.  This passes if all asserts pass.
  
@@ -48,7 +48,7 @@ def task(ctx, config):
 
     timeout = 60
     first_mon = teuthology.get_first_mon(ctx, config)
-    (mon,) = ctx.cluster.only(first_mon).remotes.iterkeys()
+    (mon,) = ctx.cluster.only(first_mon).remotes.keys()
 
     manager = ceph_manager.CephManager(
         mon,

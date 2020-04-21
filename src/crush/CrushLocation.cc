@@ -4,9 +4,11 @@
 #include "include/compat.h"
 #include "CrushLocation.h"
 #include "CrushWrapper.h"
+#include "common/ceph_context.h"
 #include "common/config.h"
 #include "include/str_list.h"
 #include "common/debug.h"
+#include "common/errno.h"
 #include "include/compat.h"
 
 #include "common/SubProcess.h"
@@ -76,13 +78,15 @@ int CrushLocation::update_from_hook()
     lderr(cct) << "stderr:\n";
     err.hexdump(*_dout);
     *_dout << dendl;
-    return ret;
   }
 
   if (hook.join() != 0) {
     lderr(cct) << "error: failed to join: " << hook.err() << dendl;
     return -EINVAL;
   }
+
+  if (ret < 0)
+    return ret;
 
   std::string out;
   bl.copy(0, bl.length(), out);
@@ -101,7 +105,7 @@ int CrushLocation::init_on_startup()
 
   // start with a sane default
   char hostname[HOST_NAME_MAX + 1];
-  int r = gethostname(hostname, sizeof(hostname)-1);
+  int r = gethostname(hostname, sizeof(hostname));
   if (r < 0)
     strcpy(hostname, "unknown_host");
   // use short hostname

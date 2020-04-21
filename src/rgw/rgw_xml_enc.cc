@@ -1,5 +1,6 @@
 // -*- mode:C++; tab-width:8; c-basic-offset:2; indent-tabs-mode:t -*-
 // vim: ts=8 sw=2 smarttab
+
 /*
  * Ceph - scalable distributed file system
  *
@@ -12,6 +13,7 @@
  * Foundation.  See file COPYING.
  * 
  */
+
 #include "rgw_common.h"
 #include "rgw_xml.h"
 
@@ -114,11 +116,13 @@ void decode_xml_obj(list<RGWBWRoutingRule>& l, XMLObj *obj)
 void RGWBucketWebsiteConf::decode_xml(XMLObj *obj) {
   XMLObj *o = obj->find_first("RedirectAllRequestsTo");
   if (o) {
+    is_redirect_all = true;
     RGWXMLDecoder::decode_xml("HostName", redirect_all.hostname, o, true);
     RGWXMLDecoder::decode_xml("Protocol", redirect_all.protocol, o);
   } else {
     o = obj->find_first("IndexDocument");
     if (o) {
+      is_set_index_doc = true;
       RGWXMLDecoder::decode_xml("Suffix", index_doc_suffix, o);
     }
     o = obj->find_first("ErrorDocument");

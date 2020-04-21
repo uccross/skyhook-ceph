@@ -6,7 +6,7 @@
 #include "rgw_frontend.h"
 #include "include/str_list.h"
 
-#include "include/assert.h"
+#include "include/ceph_assert.h"
 
 
 #define dout_context g_ceph_context
@@ -15,12 +15,7 @@
 int RGWFrontendConfig::parse_config(const string& config,
 				    std::multimap<string, string>& config_map)
 {
-  list<string> config_list;
-  get_str_list(config, " ", config_list);
-
-  list<string>::iterator iter;
-  for (iter = config_list.begin(); iter != config_list.end(); ++iter) {
-    string& entry = *iter;
+  for (auto& entry : get_str_vec(config, " ")) {
     string key;
     string val;
 

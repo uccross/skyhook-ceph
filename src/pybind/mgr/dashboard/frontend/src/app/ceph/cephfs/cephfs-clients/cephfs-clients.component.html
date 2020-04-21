@@ -1,0 +1,6 @@
+<cd-view-cache [status]="viewCacheStatus"></cd-view-cache>
+
+<cd-table [data]="clients.data"
+          [columns]="clients.columns"
+          (fetchData)="refresh()">
+</cd-table>

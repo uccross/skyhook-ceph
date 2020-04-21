@@ -20,7 +20,6 @@
 
 #define dout_subsys ceph_subsys_
 
-using namespace std;
 
 namespace ceph {
 
@@ -65,15 +64,15 @@ DNSResolver::~DNSResolver()
 #ifdef HAVE_RES_NQUERY
 int DNSResolver::get_state(CephContext *cct, res_state *ps)
 {
-  lock.Lock();
+  lock.lock();
   if (!states.empty()) {
     res_state s = states.front();
     states.pop_front();
-    lock.Unlock();
+    lock.unlock();
     *ps = s;
     return 0;
   }
-  lock.Unlock();
+  lock.unlock();
   struct __res_state *s = new struct __res_state;
   s->options = 0;
   if (res_ninit(s) < 0) {
@@ -87,7 +86,7 @@ int DNSResolver::get_state(CephContext *cct, res_state *ps)
 
 void DNSResolver::put_state(res_state s)
 {
-  Mutex::Locker l(lock);
+  std::lock_guard l(lock);
   states.push_back(s);
 }
 #endif
@@ -123,7 +122,7 @@ int DNSResolver::resolve_cname(CephContext *cct, const string& hostname,
 #else
   {
 # ifndef HAVE_THREAD_SAFE_RES_QUERY
-    Mutex::Locker l(lock);
+    std::lock_guard l(lock);
 # endif
     len = resolv_h->res_query(origname, ns_c_in, ns_t_cname, buf, sizeof(buf));
   }
@@ -220,7 +219,7 @@ int DNSResolver::resolve_ip_addr(CephContext *cct, res_state *res, const string&
 #else
   {
 # ifndef HAVE_THREAD_SAFE_RES_QUERY
-    Mutex::Locker l(lock);
+    std::lock_guard l(lock);
 # endif
     len = resolv_h->res_query(hostname.c_str(), ns_c_in, type, nsbuf, sizeof(nsbuf));
   }
@@ -250,6 +249,7 @@ int DNSResolver::resolve_ip_addr(CephContext *cct, res_state *res, const string&
   }
 
   char addr_buf[64];
+  // FIPS zeroization audit 20191115: this memset is not security related.
   memset(addr_buf, 0, sizeof(addr_buf));
   inet_ntop(family, ns_rr_rdata(rr), addr_buf, sizeof(addr_buf));
   if (!addr->parse(addr_buf)) {
@@ -296,7 +296,7 @@ int DNSResolver::resolve_srv_hosts(CephContext *cct, const string& service_name,
 #else
   {
 # ifndef HAVE_THREAD_SAFE_RES_QUERY
-    Mutex::Locker l(lock);
+    std::lock_guard l(lock);
 # endif
     len = resolv_h->res_search(query_str.c_str(), ns_c_in, ns_t_srv, nsbuf,
         sizeof(nsbuf));
@@ -340,6 +340,7 @@ int DNSResolver::resolve_srv_hosts(CephContext *cct, const string& service_name,
     uint16_t priority = ns_get16(rdata); rdata += NS_INT16SZ;
     rdata += NS_INT16SZ;	// weight
     uint16_t port = ns_get16(rdata); rdata += NS_INT16SZ;
+    // FIPS zeroization audit 20191115: this memset is not security related.
     memset(full_target, 0, sizeof(full_target));
     ns_name_uncompress(ns_msg_base(handle), ns_msg_end(handle),
                        rdata, full_target, sizeof(full_target));

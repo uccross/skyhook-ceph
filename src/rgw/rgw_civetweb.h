@@ -28,7 +28,7 @@ class RGWCivetWeb : public rgw::io::RestfulClient,
   size_t dump_date_header();
 
 public:
-  int init_env(CephContext *cct) override;
+  [[nodiscard]] int init_env(CephContext *cct) override;
 
   size_t send_status(int status, const char *status_name) override;
   size_t send_100_continue() override;
@@ -53,7 +53,7 @@ public:
     return env;
   }
 
-  RGWCivetWeb(mg_connection *_conn);
+  explicit RGWCivetWeb(mg_connection *_conn);
 };
 
 #endif

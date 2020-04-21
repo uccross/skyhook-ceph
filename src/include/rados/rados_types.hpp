@@ -193,10 +193,12 @@ struct obj_err_t {
     ATTR_NAME_MISMATCH    = 1 << 8,
     SNAPSET_INCONSISTENCY   = 1 << 9,
     HINFO_INCONSISTENCY   = 1 << 10,
+    SIZE_TOO_LARGE        = 1 << 11,
     // When adding more here add to either SHALLOW_ERRORS or DEEP_ERRORS
   };
   uint64_t errors = 0;
-  static constexpr uint64_t SHALLOW_ERRORS = OBJECT_INFO_INCONSISTENCY|SIZE_MISMATCH|ATTR_VALUE_MISMATCH|ATTR_NAME_MISMATCH|SNAPSET_INCONSISTENCY|HINFO_INCONSISTENCY;
+  static constexpr uint64_t SHALLOW_ERRORS = OBJECT_INFO_INCONSISTENCY|SIZE_MISMATCH|ATTR_VALUE_MISMATCH
+	  |ATTR_NAME_MISMATCH|SNAPSET_INCONSISTENCY|HINFO_INCONSISTENCY|SIZE_TOO_LARGE;
   static constexpr uint64_t DEEP_ERRORS = DATA_DIGEST_MISMATCH|OMAP_DIGEST_MISMATCH;
   bool has_object_info_inconsistency() const {
     return errors & OBJECT_INFO_INCONSISTENCY;
@@ -228,6 +230,9 @@ struct obj_err_t {
   bool has_hinfo_inconsistency() const {
     return errors & HINFO_INCONSISTENCY;
   }
+  bool has_size_too_large() const {
+    return errors & SIZE_TOO_LARGE;
+  }
 };
 
 struct inconsistent_obj_t : obj_err_t {
@@ -251,7 +256,7 @@ struct inconsistent_snapset_t {
     SNAPSET_CORRUPTED = 1 << 1,
     CLONE_MISSING  = 1 << 2,
     SNAP_ERROR  = 1 << 3,
-    HEAD_MISMATCH  = 1 << 4,
+    HEAD_MISMATCH  = 1 << 4,  // Unused
     HEADLESS_CLONE = 1 << 5,
     SIZE_MISMATCH  = 1 << 6,
     OI_MISSING   = 1 << 7,    // Old
@@ -288,8 +293,8 @@ struct inconsistent_snapset_t {
   bool snapset_error() const {
     return errors & SNAP_ERROR;
   }
-  bool head_mismatch() const {
-    return errors & HEAD_MISMATCH;
+  bool head_mismatch() const {      // Compatibility
+    return false;
   }
   bool headless() const {
     return errors & HEADLESS_CLONE;

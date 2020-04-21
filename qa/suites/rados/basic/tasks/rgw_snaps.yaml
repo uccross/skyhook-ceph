@@ -12,20 +12,23 @@ tasks:
 - ceph_manager.wait_for_pools:
     kwargs:
       pools:
-        - .rgw.buckets
+        - default.rgw.buckets.data
+        - default.rgw.buckets.index
         - .rgw.root
         - default.rgw.control
         - default.rgw.meta
         - default.rgw.log
 - thrash_pool_snaps:
     pools:
-    - .rgw.buckets
+    - default.rgw.buckets.data
+    - default.rgw.buckets.index
     - .rgw.root
     - default.rgw.control
     - default.rgw.meta
     - default.rgw.log
 - s3readwrite:
     client.0:
+      force-branch: ceph-nautilus
       rgw_server: client.0
       readwrite:
         bucket: rwtest

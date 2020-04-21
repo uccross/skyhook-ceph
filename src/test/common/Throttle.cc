@@ -21,19 +21,18 @@
 
 #include <stdio.h>
 #include <signal.h>
+
+#include <chrono>
+#include <list>
+#include <mutex>
+#include <random>
+#include <thread>
+
 #include "gtest/gtest.h"
 #include "common/Mutex.h"
 #include "common/Thread.h"
 #include "common/Throttle.h"
 #include "common/ceph_argparse.h"
-#include "common/backport14.h"
-
-#include <thread>
-#include <atomic>
-#include <chrono>
-#include <mutex>
-#include <list>
-#include <random>
 
 class ThrottleTest : public ::testing::Test {
 protected:
@@ -42,20 +41,16 @@ protected:
   public:
     Throttle &throttle;
     int64_t count;
-    bool waited;
+    bool waited = false;
 
     Thread_get(Throttle& _throttle, int64_t _count) :
-      throttle(_throttle),
-      count(_count),
-      waited(false)
-    {
-    }
+      throttle(_throttle), count(_count) {}
 
     void *entry() override {
       usleep(5);
       waited = throttle.get(count);
       throttle.put(count);
-      return NULL;
+      return nullptr;
     }
   };
 };
@@ -216,32 +211,6 @@ TEST_F(ThrottleTest, wait) {
   } while(!waited);
 }
 
-
-TEST_F(ThrottleTest, destructor) {
-  EXPECT_DEATH({
-      int64_t throttle_max = 10;
-      auto throttle = ceph::make_unique<Throttle>(g_ceph_context, "throttle",
-						  throttle_max);
-
-
-      ASSERT_FALSE(throttle->get(5));
-      unique_ptr<Thread_get> t = ceph::make_unique<Thread_get>(*throttle, 7);
-      t->create("t_throttle");
-      bool blocked;
-      useconds_t delay = 1;
-      do {
-	usleep(delay);
-	if (throttle->get_or_fail(1)) {
-	  throttle->put(1);
-	  blocked = false;
-	} else {
-	  blocked = true;
-	}
-	delay *= 2;
-      } while (!blocked);
-    }, ".*");
-}
-
 std::pair<double, std::chrono::duration<double> > test_backoff(
   double low_threshhold,
   double high_threshhold,
@@ -275,7 +244,7 @@ std::pair<double, std::chrono::duration<double> > test_backoff(
     max_multiple,
     max,
     0);
-  assert(valid);
+  ceph_assert(valid);
 
   auto getter = [&]() {
     std::random_device rd;
@@ -311,7 +280,7 @@ std::pair<double, std::chrono::duration<double> > test_backoff(
       total_observed_total += total;
       total_observations++;
       in_queue.pop_front();
-      assert(total <= max);
+      ceph_assert(total <= max);
 
       g.unlock();
       std::this_thread::sleep_for(
@@ -349,25 +318,6 @@ std::pair<double, std::chrono::duration<double> > test_backoff(
   return make_pair(
     ((double)total_observed_total)/((double)total_observations),
     wait_time / waits);
-}
-
-TEST(BackoffThrottle, destruct) {
-  EXPECT_DEATH({
-      auto throttle = ceph::make_unique<BackoffThrottle>(
-	g_ceph_context, "destructor test", 10);
-      ASSERT_TRUE(throttle->set_params(0.4, 0.6, 1000, 2, 10, 6, nullptr));
-
-      throttle->get(5);
-      {
-	auto& t = *throttle;
-	std::thread([&t]() {
-	    usleep(5);
-	    t.get(6);
-	  });
-      }
-      // No equivalent of get_or_fail()
-      std::this_thread::sleep_for(std::chrono::milliseconds(250));
-    }, ".*");
 }
 
 TEST(BackoffThrottle, undersaturated)
@@ -424,27 +374,11 @@ TEST(BackoffThrottle, oversaturated)
   ASSERT_GT(results.second.count(), 0.0005);
 }
 
-TEST(OrderedThrottle, destruct) {
-  EXPECT_DEATH({
-      auto throttle = ceph::make_unique<OrderedThrottle>(1, false);
-      throttle->start_op(nullptr);
-      {
-	auto& t = *throttle;
-	std::thread([&t]() {
-	    usleep(5);
-	    t.start_op(nullptr);
-	  });
-      }
-      // No equivalent of get_or_fail()
-      std::this_thread::sleep_for(std::chrono::milliseconds(250));
-    }, ".*");
-}
-
 /*
  * Local Variables:
  * compile-command: "cd ../.. ;
  *   make unittest_throttle ;
- *   ./unittest_throttle # --gtest_filter=ThrottleTest.destructor \
+ *   ./unittest_throttle # --gtest_filter=ThrottleTest.take \
  *       --log-to-stderr=true --debug-filestore=20
  * "
  * End:

@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 class Create(object):
 
-    help = 'Create a new OSD from  an LVM device'
+    help = 'Create a new OSD from an LVM device'
 
     def __init__(self, argv):
         self.argv = argv
@@ -42,21 +42,24 @@ class Create(object):
         Create an OSD by assigning an ID and FSID, registering them with the
         cluster with an ID and FSID, formatting and mounting the volume, adding
         all the metadata to the logical volumes using LVM tags, and starting
-        the OSD daemon.
+        the OSD daemon. This is a convinience command that combines the prepare
+        and activate steps.
 
-        Example calls for supported scenarios:
+        Encryption is supported via dmcrypt and the --dmcrypt flag.
 
-        Filestore
-        ---------
+        Existing logical volume (lv):
 
-          Existing logical volume (lv) or device:
+            ceph-volume lvm create --data {vg/lv}
 
-              ceph-volume lvm create --filestore --data {vg name/lv name} --journal /path/to/device
+        Existing block device (a logical volume will be created):
 
-          Or:
+            ceph-volume lvm create --data /path/to/device
 
-              ceph-volume lvm create --filestore --data {vg name/lv name} --journal {vg name/lv name}
+        Optionally, can consume db and wal block devices, partitions or logical
+        volumes. A device will get a logical volume, partitions and existing
+        logical volumes will be used as is:
 
+            ceph-volume lvm create --data {vg/lv} --block.wal {partition} --block.db {/path/to/device}
         """)
         parser = create_parser(
             prog='ceph-volume lvm create',

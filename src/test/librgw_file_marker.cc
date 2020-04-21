@@ -24,11 +24,10 @@
 #include "rgw/rgw_lib_frontend.h" // direct requests
 
 #include "gtest/gtest.h"
-#include "common/backport14.h"
 #include "common/ceph_argparse.h"
 #include "common/debug.h"
 #include "global/global_init.h"
-#include "include/assert.h"
+#include "include/ceph_assert.h"
 
 #define dout_subsys ceph_subsys_rgw
 
@@ -83,6 +82,7 @@ namespace {
     friend ostream& operator<<(ostream& os, const obj_rec& rec);
   };
 
+  /* Unused
   ostream& operator<<(ostream& os, const obj_rec& rec)
   {
     RGWFileHandle* rgw_fh = rec.rgw_fh;
@@ -94,7 +94,8 @@ namespace {
     }
     return os;
   }
-  
+  */
+
   std::stack<obj_rec> obj_stack;
   std::deque<obj_rec> cleanup_queue;
 
@@ -113,6 +114,7 @@ namespace {
       : obj(_obj), st(_st) {}
   };
 
+  /* Unused
   ostream& operator<<(ostream& os, const obj_rec_st& rec)
   {
     RGWFileHandle* rgw_fh = rec.obj.rgw_fh;
@@ -137,6 +139,7 @@ namespace {
     }
     return os;
   }
+  */
 
   bool do_marker1 = false;
   bool do_marker2 = true;
@@ -213,7 +216,7 @@ TEST(LibRGW, MARKER1_SETUP_BUCKET) {
   st.st_mode = 755;
 
   (void) rgw_lookup(fs, fs->root_fh, bucket_name.c_str(), &bucket_fh,
-		    RGW_LOOKUP_FLAG_NONE);
+		    nullptr, 0, RGW_LOOKUP_FLAG_NONE);
   if (! bucket_fh) {
     if (do_create) {
       struct stat st;
@@ -231,7 +234,7 @@ TEST(LibRGW, MARKER1_SETUP_BUCKET) {
   ASSERT_NE(bucket_fh, nullptr);
 
   (void) rgw_lookup(fs, bucket_fh, marker_dir.c_str(), &marker_fh,
-		    RGW_LOOKUP_FLAG_NONE);
+		    nullptr, 0, RGW_LOOKUP_FLAG_NONE);
   if (! marker_fh) {
     if (do_create) {
       ret = rgw_mkdir(fs, bucket_fh, marker_dir.c_str(), &st, create_mask,
@@ -256,7 +259,7 @@ TEST(LibRGW, MARKER1_SETUP_OBJECTS)
       obj_rec obj{object_name, nullptr, marker_fh, nullptr};
       // lookup object--all operations are by handle
       ret = rgw_lookup(fs, marker_fh, obj.name.c_str(), &obj.fh,
-		       RGW_LOOKUP_FLAG_CREATE);
+		       nullptr, 0, RGW_LOOKUP_FLAG_CREATE);
       ASSERT_EQ(ret, 0);
       obj.rgw_fh = get_rgwfh(obj.fh);
       // open object--open transaction
@@ -282,6 +285,7 @@ TEST(LibRGW, MARKER1_SETUP_OBJECTS)
 
 extern "C" {
   static bool r2_cb(const char* name, void *arg, uint64_t offset,
+		    struct stat* st, uint32_t st_mask,
 		    uint32_t flags) {
     dirent_vec& dvec =
       *(static_cast<dirent_vec*>(arg));
@@ -473,7 +477,7 @@ int main(int argc, char *argv[])
     }
   }
 
-  /* dont accidentally run as anonymous */
+  /* don't accidentally run as anonymous */
   if ((access_key == "") ||
       (secret_key == "")) {
     std::cout << argv[0] << " no AWS credentials, exiting" << std::endl;

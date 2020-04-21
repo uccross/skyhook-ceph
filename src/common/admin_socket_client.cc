@@ -12,12 +12,18 @@
  *
  */
 
+#include <arpa/inet.h>
+#include <fcntl.h>
+#include <sys/socket.h>
+#include <sys/un.h>
+
 #include "common/admin_socket.h"
 #include "common/errno.h"
 #include "common/safe_io.h"
 #include "common/admin_socket_client.h"
 
-#include <sys/un.h>
+#include "include/compat.h"
+#include "include/sock_compat.h"
 
 using std::ostringstream;
 
@@ -41,7 +47,7 @@ const char* get_rand_socket_path()
 
 static std::string asok_connect(const std::string &path, int *fd)
 {
-  int socket_fd = socket(PF_UNIX, SOCK_STREAM, 0);
+  int socket_fd = socket_cloexec(PF_UNIX, SOCK_STREAM, 0);
   if(socket_fd < 0) {
     int err = errno;
     ostringstream oss;
@@ -50,6 +56,7 @@ static std::string asok_connect(const std::string &path, int *fd)
   }
 
   struct sockaddr_un address;
+  // FIPS zeroization audit 20191115: this memset is fine.
   memset(&address, 0, sizeof(struct sockaddr_un));
   address.sun_family = AF_UNIX;
   snprintf(address.sun_path, sizeof(address.sun_path), "%s", path.c_str());
@@ -64,7 +71,7 @@ static std::string asok_connect(const std::string &path, int *fd)
   }
 
   struct timeval timer;
-  timer.tv_sec = 5;
+  timer.tv_sec = 10;
   timer.tv_usec = 0;
   if (::setsockopt(socket_fd, SOL_SOCKET, SO_RCVTIMEO, &timer, sizeof(timer))) {
     int err = errno;
@@ -74,7 +81,7 @@ static std::string asok_connect(const std::string &path, int *fd)
     close(socket_fd);
     return oss.str();
   }
-  timer.tv_sec = 5;
+  timer.tv_sec = 10;
   timer.tv_usec = 0;
   if (::setsockopt(socket_fd, SOL_SOCKET, SO_SNDTIMEO, &timer, sizeof(timer))) {
     int err = errno;

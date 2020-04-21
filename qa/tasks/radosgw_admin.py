@@ -16,7 +16,6 @@ import logging
 import time
 import datetime
 import Queue
-import bunch
 
 import sys
 
@@ -207,7 +206,7 @@ class requestlog_queue():
 	    pass
 	elif response.status < 200 or response.status >= 400:
 	    error = True
-        self.q.put(bunch.Bunch({'t': now, 'o': request, 'i': response, 'e': error}))
+        self.q.put({'t': now, 'o': request, 'i': response, 'e': error})
     def clear(self):
         with self.q.mutex:
             self.q.queue.clear()
@@ -215,16 +214,16 @@ class requestlog_queue():
         while not self.q.empty():
             j = self.q.get()
 	    bytes_out = 0
-            if 'Content-Length' in j.o.headers:
-		bytes_out = int(j.o.headers['Content-Length'])
+            if 'Content-Length' in j['o'].headers:
+		bytes_out = int(j['o'].headers['Content-Length'])
             bytes_in = 0
-            if 'content-length' in j.i.msg.dict:
-		bytes_in = int(j.i.msg.dict['content-length'])
+            if 'content-length' in j['i'].msg.dict:
+		bytes_in = int(j['i'].msg.dict['content-length'])
             log.info('RL: %s %s %s bytes_out=%d bytes_in=%d failed=%r'
-		% (cat, bucket, user, bytes_out, bytes_in, j.e))
+		% (cat, bucket, user, bytes_out, bytes_in, j['e']))
 	    if add_entry == None:
 		add_entry = self.adder
-	    add_entry(cat, bucket, user, bytes_out, bytes_in, j.e)
+	    add_entry(cat, bucket, user, bytes_out, bytes_in, j['e'])
 
 def create_presigned_url(conn, method, bucket_name, key_name, expiration):
     return conn.generate_url(expires_in=expiration,
@@ -279,7 +278,7 @@ def task(ctx, config):
 
     # once the client is chosen, pull the host name and  assigned port out of
     # the role_endpoints that were assigned by the rgw task
-    (remote_host, remote_port) = ctx.rgw.role_endpoints[client]
+    endpoint = ctx.rgw.role_endpoints[client]
 
     ##
     user1='foo'
@@ -305,16 +304,16 @@ def task(ctx, config):
         aws_access_key_id=access_key,
         aws_secret_access_key=secret_key,
         is_secure=False,
-        port=remote_port,
-        host=remote_host,
+        port=endpoint.port,
+        host=endpoint.hostname,
         calling_format=boto.s3.connection.OrdinaryCallingFormat(),
         )
     connection2 = boto.s3.connection.S3Connection(
         aws_access_key_id=access_key2,
         aws_secret_access_key=secret_key2,
         is_secure=False,
-        port=remote_port,
-        host=remote_host,
+        port=endpoint.port,
+        host=endpoint.hostname,
         calling_format=boto.s3.connection.OrdinaryCallingFormat(),
         )
 
@@ -665,6 +664,61 @@ def task(ctx, config):
             check_status=True)
 
     # TODO: show log by bucket+date
+
+    # need to wait for all usage data to get flushed, should take up to 30 seconds
+    timestamp = time.time()
+    while time.time() - timestamp <= (20 * 60):      # wait up to 20 minutes
+        (err, out) = rgwadmin(ctx, client, ['usage', 'show', '--categories', 'delete_obj'])  # last operation we did is delete obj, wait for it to flush
+        if get_user_successful_ops(out, user1) > 0:
+            break
+        time.sleep(1)
+
+    assert time.time() - timestamp <= (20 * 60)
+
+    # TESTCASE 'usage-show' 'usage' 'show' 'all usage' 'succeeds'
+    (err, out) = rgwadmin(ctx, client, ['usage', 'show'], check_status=True)
+    assert len(out['entries']) > 0
+    assert len(out['summary']) > 0
+
+    user_summary = get_user_summary(out, user1)
+
+    total = user_summary['total']
+    assert total['successful_ops'] > 0
+
+    # TESTCASE 'usage-show2' 'usage' 'show' 'user usage' 'succeeds'
+    (err, out) = rgwadmin(ctx, client, ['usage', 'show', '--uid', user1],
+        check_status=True)
+    assert len(out['entries']) > 0
+    assert len(out['summary']) > 0
+    user_summary = out['summary'][0]
+    for entry in user_summary['categories']:
+        assert entry['successful_ops'] > 0
+    assert user_summary['user'] == user1
+
+    # TESTCASE 'usage-show3' 'usage' 'show' 'user usage categories' 'succeeds'
+    test_categories = ['create_bucket', 'put_obj', 'delete_obj', 'delete_bucket']
+    for cat in test_categories:
+        (err, out) = rgwadmin(ctx, client, ['usage', 'show', '--uid', user1, '--categories', cat],
+            check_status=True)
+        assert len(out['summary']) > 0
+        user_summary = out['summary'][0]
+        assert user_summary['user'] == user1
+        assert len(user_summary['categories']) == 1
+        entry = user_summary['categories'][0]
+        assert entry['category'] == cat
+        assert entry['successful_ops'] > 0
+
+    # the usage flush interval is 30 seconds, wait that much an then some
+    # to make sure everything has been flushed
+    time.sleep(35)
+
+    # TESTCASE 'usage-trim' 'usage' 'trim' 'user usage' 'succeeds, usage removed'
+    (err, out) = rgwadmin(ctx, client, ['usage', 'trim', '--uid', user1],
+        check_status=True)
+    (err, out) = rgwadmin(ctx, client, ['usage', 'show', '--uid', user1],
+        check_status=True)
+    assert len(out['entries']) == 0
+    assert len(out['summary']) == 0
 
     # TESTCASE 'user-suspend2','user','suspend','existing user','succeeds'
     (err, out) = rgwadmin(ctx, client, ['user', 'suspend', '--uid', user1],

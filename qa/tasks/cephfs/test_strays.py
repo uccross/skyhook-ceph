@@ -197,11 +197,10 @@ class TestStrays(CephFSTestCase):
             num_strays = mdc_stats['num_strays']
             num_strays_purging = pq_stats['pq_executing']
             num_purge_ops = pq_stats['pq_executing_ops']
+            files_high_water = pq_stats['pq_executing_high_water']
+            ops_high_water = pq_stats['pq_executing_ops_high_water']
 
-            self.data_log.append([datetime.datetime.now(), num_strays, num_strays_purging, num_purge_ops])
-
-            files_high_water = max(files_high_water, num_strays_purging)
-            ops_high_water = max(ops_high_water, num_purge_ops)
+            self.data_log.append([datetime.datetime.now(), num_strays, num_strays_purging, num_purge_ops, files_high_water, ops_high_water])
 
             total_strays_created = mdc_stats['strays_created']
             total_strays_purged = pq_stats['pq_executed']
@@ -245,11 +244,18 @@ class TestStrays(CephFSTestCase):
                 raise RuntimeError("Ops in flight high water is unexpectedly low ({0} / {1})".format(
                     ops_high_water, mds_max_purge_ops
                 ))
+            # The MDS may go over mds_max_purge_ops for some items, like a
+            # heavily fragmented directory.  The throttle does not kick in
+            # until *after* we reach or exceed the limit.  This is expected
+            # because we don't want to starve the PQ or never purge a
+            # particularly large file/directory.
+            self.assertLessEqual(ops_high_water, mds_max_purge_ops+64)
         elif throttle_type == self.FILES_THROTTLE:
             if files_high_water < mds_max_purge_files / 2:
                 raise RuntimeError("Files in flight high water is unexpectedly low ({0} / {1})".format(
-                    ops_high_water, mds_max_purge_files
+                    files_high_water, mds_max_purge_files
                 ))
+            self.assertLessEqual(files_high_water, mds_max_purge_files)
 
         # Sanity check all MDC stray stats
         stats = self.fs.mds_asok(['perf', 'dump'])
@@ -579,7 +585,6 @@ class TestStrays(CephFSTestCase):
 
         # Shut down rank 1
         self.fs.set_max_mds(1)
-        self.fs.deactivate(1)
 
         # It shouldn't proceed past stopping because its still not allowed
         # to purge
@@ -593,10 +598,7 @@ class TestStrays(CephFSTestCase):
                                             "--mds_max_purge_files 100")
 
         # It should now proceed through shutdown
-        self.wait_until_true(
-            lambda: self._is_stopped(1),
-            timeout=60
-        )
+        self.fs.wait_for_daemons(timeout=120)
 
         # ...and in the process purge all that data
         self.await_data_pool_empty()
@@ -638,11 +640,8 @@ class TestStrays(CephFSTestCase):
                                mds_id=rank_1_id)
 
         # Shut down rank 1
-        self.fs.mon_manager.raw_cluster_cmd_result('mds', 'set', "max_mds", "1")
-        self.fs.mon_manager.raw_cluster_cmd_result('mds', 'deactivate', "1")
-
-        # Wait til we get to a single active MDS mdsmap state
-        self.wait_until_true(lambda: self._is_stopped(1), timeout=120)
+        self.fs.set_max_mds(1)
+        self.fs.wait_for_daemons(timeout=120)
 
         # See that the stray counter on rank 0 has incremented
         self.assertEqual(self.get_mdc_stat("strays_created", rank_0_id), 1)
@@ -744,8 +743,7 @@ class TestStrays(CephFSTestCase):
         in purging on the stray for the file.
         """
         # Enable snapshots
-        self.fs.mon_manager.raw_cluster_cmd("mds", "set", "allow_new_snaps", "true",
-                                            "--yes-i-really-mean-it")
+        self.fs.set_allow_new_snaps(True)
 
         # Create a dir with a file in it
         size_mb = 8
@@ -833,8 +831,6 @@ class TestStrays(CephFSTestCase):
 
         That unlinking fails when the stray directory fragment becomes too large and that unlinking may continue once those strays are purged.
         """
-
-        self.fs.set_allow_dirfrags(True)
 
         LOW_LIMIT = 50
         for mds in self.fs.get_daemon_names():

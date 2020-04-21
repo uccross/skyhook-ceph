@@ -67,10 +67,10 @@ function setup_log_test() {
     ceph tell osd.\* injectargs -- --osd-pg-log-trim-min 10 || return 1
     ceph tell osd.\* injectargs -- --osd-pg-log-dups-tracked 10 || return 1
 
-    touch foo
+    touch $dir/foo
     for i in $(seq 1 20)
     do
-        rados -p test put foo foo || return 1
+        rados -p test put foo $dir/foo || return 1
     done
 
     test_log_size $PGID 20 || return 1
@@ -93,7 +93,7 @@ function TEST_repro_long_log1()
 
     setup_log_test $dir || return 1
     # regular write should trim the log
-    rados -p test put foo foo || return 1
+    rados -p test put foo $dir/foo || return 1
     test_log_size $PGID 22 || return 1
 }
 
@@ -105,7 +105,7 @@ function TEST_repro_long_log2()
     local PRIMARY=$(ceph pg $PGID query  | jq '.info.stats.up_primary')
     kill_daemons $dir TERM osd.$PRIMARY || return 1
     CEPH_ARGS="--osd-max-pg-log-entries=2 --no-mon-config" ceph-objectstore-tool --data-path $dir/$PRIMARY --pgid $PGID --op trim-pg-log || return 1
-    run_osd $dir $PRIMARY || return 1
+    activate_osd $dir $PRIMARY || return 1
     wait_for_clean || return 1
     test_log_size $PGID 2 || return 1
 }
