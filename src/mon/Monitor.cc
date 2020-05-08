@@ -1149,6 +1149,19 @@ void Monitor::bootstrap()
 	    << messenger->get_myaddrs()
 	    << ", monmap is " << monmap->get_addrs(newrank) << ", respawning"
 	    << dendl;
+
+    if (monmap->get_epoch()) {
+      // store this map in temp mon_sync location so that we use it on
+      // our next startup
+      derr << " stashing newest monmap " << monmap->get_epoch()
+	   << " for next startup" << dendl;
+      bufferlist bl;
+      monmap->encode(bl, -1);
+      auto t(std::make_shared<MonitorDBStore::Transaction>());
+      t->put("mon_sync", "temp_newer_monmap", bl);
+      store->apply_transaction(t);
+    }
+
     respawn();
   }
   if (newrank != rank) {
@@ -4355,6 +4368,7 @@ void Monitor::_ms_dispatch(Message *m)
       if (s->item.is_on_list()) {
         // forwarded messages' sessions are not in the sessions map and
         // exist only while the op is being handled.
+        std::lock_guard l(session_map_lock);
         remove_session(s);
       }
       s = nullptr;

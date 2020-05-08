@@ -4467,7 +4467,8 @@ void OSDMonitor::check_pg_creates_sub(Subscription *sub)
 void OSDMonitor::do_application_enable(int64_t pool_id,
                                        const std::string &app_name,
 				       const std::string &app_key,
-				       const std::string &app_value)
+				       const std::string &app_value,
+				       bool force)
 {
   ceph_assert(paxos->is_plugged() && is_writeable());
 
@@ -4487,7 +4488,11 @@ void OSDMonitor::do_application_enable(int64_t pool_id,
   if (app_key.empty()) {
     p.application_metadata.insert({app_name, {}});
   } else {
-    p.application_metadata.insert({app_name, {{app_key, app_value}}});
+    if (force) {
+      p.application_metadata[app_name][app_key] = app_value;
+    } else {
+      p.application_metadata.insert({app_name, {{app_key, app_value}}});
+    }
   }
   p.last_change = pending_inc.epoch;
   pending_inc.new_pools[pool_id] = p;
@@ -7565,8 +7570,7 @@ int OSDMonitor::prepare_command_pool_set(const cmdmap_t& cmdmap,
       return r;
     }
     p.size = n;
-    if (n < p.min_size)
-      p.min_size = n;
+    p.min_size = g_conf().get_osd_pool_default_min_size(p.size);
   } else if (var == "min_size") {
     if (p.has_flag(pg_pool_t::FLAG_NOSIZECHANGE)) {
       ss << "pool min size change is disabled; you must unset nosizechange flag for the pool first";

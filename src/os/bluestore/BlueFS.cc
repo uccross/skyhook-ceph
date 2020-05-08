@@ -310,10 +310,12 @@ uint64_t BlueFS::get_block_device_size(unsigned id)
   return 0;
 }
 
-void BlueFS::_add_block_extent(unsigned id, uint64_t offset, uint64_t length)
+void BlueFS::_add_block_extent(unsigned id, uint64_t offset, uint64_t length,
+                               bool skip)
 {
   dout(1) << __func__ << " bdev " << id
 	  << " 0x" << std::hex << offset << "~" << length << std::dec
+	  << " skip " << skip
 	  << dendl;
 
   ceph_assert(id < bdev.size());
@@ -322,7 +324,9 @@ void BlueFS::_add_block_extent(unsigned id, uint64_t offset, uint64_t length)
   block_all[id].insert(offset, length);
 
   if (id < alloc.size() && alloc[id]) {
-    log_t.op_alloc_add(id, offset, length);
+    if (!skip)
+      log_t.op_alloc_add(id, offset, length);
+
     alloc[id]->init_add_free(offset, length);
   }
 
@@ -412,12 +416,21 @@ void BlueFS::dump_block_extents(ostream& out)
     }
     auto owned = get_total(i);
     auto free = get_free(i);
+
     out << i << " : device size 0x" << std::hex << bdev[i]->get_size()
         << " : own 0x" << block_all[i]
         << " = 0x" << owned
         << " : using 0x" << owned - free
-	<< std::dec << "(" << byte_u_t(owned - free) << ")"
-        << "\n";
+	<< std::dec << "(" << byte_u_t(owned - free) << ")";
+    if (i == _get_slow_device_id()) {
+      ceph_assert(slow_dev_expander);
+      ceph_assert(alloc[i]);
+      free = slow_dev_expander->available_freespace(alloc_size[i]);
+      out << std::hex
+          << " : bluestore has 0x" << free
+          << std::dec << "(" << byte_u_t(free) << ") available";
+    }
+    out << "\n";
   }
 }
 
@@ -644,11 +657,11 @@ int BlueFS::mount()
   return r;
 }
 
-void BlueFS::umount()
+void BlueFS::umount(bool avoid_compact)
 {
   dout(1) << __func__ << dendl;
 
-  sync_metadata();
+  sync_metadata(avoid_compact);
 
   _close_writer(log_writer);
   log_writer = NULL;
@@ -2122,12 +2135,6 @@ void BlueFS::_pad_bl(bufferlist& bl)
   }
 }
 
-void BlueFS::flush_log()
-{
-  std::unique_lock l(lock);
-  flush_bdev();
-  _flush_and_sync_log(l);
-}
 
 int BlueFS::_flush_and_sync_log(std::unique_lock<ceph::mutex>& l,
 				uint64_t want_seq,
@@ -2654,9 +2661,9 @@ int BlueFS::_expand_slow_device(uint64_t need, PExtentVector& extents)
 {
   int r = -ENOSPC;
   if (slow_dev_expander) {
-    int id = _get_slow_device_id();
+    auto id = _get_slow_device_id();
     auto min_alloc_size = alloc_size[id];
-    ceph_assert(id <= (int)alloc.size() && alloc[id]);
+    ceph_assert(id <= alloc.size() && alloc[id]);
     auto min_need = round_up_to(need, min_alloc_size);
     need = std::max(need,
       slow_dev_expander->get_recommended_expansion_delta(
@@ -2809,7 +2816,7 @@ int BlueFS::_preallocate(FileRef f, uint64_t off, uint64_t len)
   return 0;
 }
 
-void BlueFS::sync_metadata()
+void BlueFS::sync_metadata(bool avoid_compact)
 {
   std::unique_lock l(lock);
   if (log_t.empty()) {
@@ -2822,7 +2829,7 @@ void BlueFS::sync_metadata()
     dout(10) << __func__ << " done in " << (ceph_clock_now() - start) << dendl;
   }
 
-  if (_should_compact_log()) {
+  if (!avoid_compact && _should_compact_log()) {
     if (cct->_conf->bluefs_compact_log_sync) {
       _compact_log_sync();
     } else {
