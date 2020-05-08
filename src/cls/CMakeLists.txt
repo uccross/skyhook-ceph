@@ -1,7 +1,6 @@
 ## Rados object classes
 
 set(cls_dir ${CMAKE_INSTALL_LIBDIR}/rados-classes)
-set(cls_embedded_srcs)
 
 # cls_sdk
 add_library(cls_sdk SHARED sdk/cls_sdk.cc)
@@ -21,7 +20,6 @@ set_target_properties(cls_hello PROPERTIES
   INSTALL_RPATH ""
   CXX_VISIBILITY_PRESET hidden)
 install(TARGETS cls_hello DESTINATION ${cls_dir})
-list(APPEND cls_embedded_srcs ${cls_hello_srcs})
 
 # cls_numops
 set(cls_numops_srcs numops/cls_numops.cc)
@@ -36,7 +34,6 @@ install(TARGETS cls_numops DESTINATION ${cls_dir})
 set(cls_numops_client_srcs numops/cls_numops_client.cc)
 add_library(cls_numops_client STATIC ${cls_numops_client_srcs})
 
-list(APPEND cls_embedded_srcs ${cls_numops_srcs} ${cls_numops_client_srcs})
 
 # cls_rbd
 if (WITH_RBD)
@@ -53,7 +50,6 @@ if (WITH_RBD)
   add_library(cls_rbd_client STATIC ${cls_rbd_client_srcs})
   target_link_libraries(cls_rbd_client cls_lock_client)
 
-  list(APPEND cls_embedded_srcs ${cls_rbd_srcs} ${cls_rbd_client_srcs})
 endif (WITH_RBD)
 
 # cls_lock
@@ -111,7 +107,6 @@ set(cls_refcount_client_srcs
   refcount/cls_refcount_ops.cc)
 add_library(cls_refcount_client STATIC ${cls_refcount_client_srcs})
 
-list(APPEND cls_embedded_srcs ${cls_refcount_srcs} ${cls_refcount_client_srcs})
 
 # cls_version
 set(cls_version_srcs version/cls_version.cc)
@@ -128,7 +123,6 @@ set(cls_version_client_srcs
   version/cls_version_types.cc)
 add_library(cls_version_client STATIC ${cls_version_client_srcs})
 
-list(APPEND cls_embedded_srcs ${cls_version_srcs} ${cls_version_client_srcs})
 
 # cls_log
 set(cls_log_srcs log/cls_log.cc)
@@ -143,21 +137,6 @@ install(TARGETS cls_log DESTINATION ${cls_dir})
 set(cls_log_client_srcs log/cls_log_client.cc)
 add_library(cls_log_client STATIC ${cls_log_client_srcs})
 
-list(APPEND cls_embedded_srcs ${cls_log_srcs} ${cls_log_client_srcs})
-
-# cls_statelog
-set(cls_statelog_srcs statelog/cls_statelog.cc)
-add_library(cls_statelog SHARED ${cls_statelog_srcs})
-set_target_properties(cls_statelog PROPERTIES
-  VERSION "1.0.0"
-  SOVERSION "1"
-  INSTALL_RPATH "")
-install(TARGETS cls_statelog DESTINATION ${cls_dir})
-
-set(cls_statelog_client_srcs statelog/cls_statelog_client.cc)
-add_library(cls_statelog_client STATIC ${cls_statelog_client_srcs})
-
-list(APPEND cls_embedded_srcs ${cls_statelog_srcs} ${cls_statelog_client_srcs})
 
 # cls_timeindex
 set(cls_timeindex_srcs timeindex/cls_timeindex.cc)
@@ -172,24 +151,6 @@ install(TARGETS cls_timeindex DESTINATION ${cls_dir})
 set(cls_timeindex_client_srcs timeindex/cls_timeindex_client.cc)
 add_library(cls_timeindex_client STATIC ${cls_timeindex_client_srcs})
 
-list(APPEND cls_embedded_srcs ${cls_timeindex_srcs} ${cls_timeindex_client_srcs})
-
-# cls_replica_log
-set(cls_replica_log_srcs replica_log/cls_replica_log.cc)
-add_library(cls_replica_log SHARED ${cls_replica_log_srcs})
-set_target_properties(cls_replica_log PROPERTIES
-  VERSION "1.0.0"
-  SOVERSION "1"
-  INSTALL_RPATH "")
-install(TARGETS cls_replica_log DESTINATION ${cls_dir})
-
-set(cls_replica_log_client_srcs
-  replica_log/cls_replica_log_types.cc
-  replica_log/cls_replica_log_ops.cc
-  replica_log/cls_replica_log_client.cc)
-add_library(cls_replica_log_client STATIC ${cls_replica_log_client_srcs})
-
-list(APPEND cls_embedded_srcs ${cls_replica_log_srcs} ${cls_replica_log_client_srcs})
 
 # cls_user
 set(cls_user_srcs user/cls_user.cc)
@@ -207,7 +168,6 @@ set(cls_user_client_srcs
   user/cls_user_ops.cc)
 add_library(cls_user_client STATIC ${cls_user_client_srcs})
 
-list(APPEND cls_embedded_srcs ${cls_user_srcs} ${cls_user_client_srcs})
 
 # cls_journal
 set(cls_journal_srcs
@@ -226,7 +186,6 @@ set(cls_journal_client_srcs
   journal/cls_journal_types.cc)
 add_library(cls_journal_client STATIC ${cls_journal_client_srcs})
 
-list(APPEND cls_embedded_srcs ${cls_journal_srcs} ${cls_journal_client_srcs})
 
 # cls_rgw
 if (WITH_RADOSGW)
@@ -250,7 +209,6 @@ if (WITH_RADOSGW)
     rgw/cls_rgw_ops.cc)
   add_library(cls_rgw_client STATIC ${cls_rgw_client_srcs})
 
-  list(APPEND cls_embedded_srcs ${cls_rgw_srcs} ${cls_rgw_client_srcs})
 endif (WITH_RADOSGW)
 
 # cls_cephfs
@@ -269,7 +227,6 @@ if (WITH_CEPHFS)
     cephfs/cls_cephfs_client.cc)
   add_library(cls_cephfs_client STATIC ${cls_cephfs_client_srcs})
 
-  list(APPEND cls_embedded_srcs ${cls_cephfs_srcs} ${cls_cephfs_client_srcs})
 endif (WITH_CEPHFS)
 
 # cls_lua
