@@ -1,0 +1,61 @@
+# paths in the workflow are relative to the root of the project, so
+# this workflow is expected to be executed as:
+#
+#   cd skyhookdm-ceph/
+#   popper run -f ci/wf.yml
+
+steps:
+- id: build libcls_tabular
+  uses: docker://popperized/ceph-builder:skyhook-bionic
+  args: cls_tabular run-query ceph_test_skyhook_query sky_tabular_flatflex_writer
+  env:
+    CMAKE_FLAGS: -DCMAKE_BUILD_TYPE=MinSizeRel -DWITH_RBD=OFF -DWITH_CEPHFS=OFF -DWITH_RADOSGW=OFF -DWITH_LEVELDB=OFF -DWITH_MANPAGE=OFF -DWITH_RDMA=OFF -DWITH_OPENLDAP=OFF -DWITH_FUSE=OFF -DWITH_LIBCEPHFS=OFF -DWITH_KRBD=OFF -DWITH_LTTNG=OFF -DWITH_BABELTRACE=OFF -DWITH_SYSTEMD=OFF -DWITH_SPDK=OFF -DWITH_CCACHE=ON -DBOOST_J=4
+    BUILD_THREADS: 4
+
+
+- id: build image with skyhook library in it
+  uses: docker://docker:19.03.3
+  args: build -t popperized/skyhookdm-libcls:luminous-bionic -f ci/Dockerfile .
+    # image contains:
+    #   - upstream ceph-mon/ceph-osd packages for luminous/bionic (NOTE: base image has
+    #     to match the base distro used for the builder image)
+    #   - skyhook libcls_tabular library and run-query binary
+    #   - runtime dependencies for the above (such as libarrow, libhdf5, etc)
+
+
+- id: run tests
+  uses: docker://popperized/skyhookdm-libcls:luminous-bionic
+  # don't pull because we want to run the image we built above
+  skip_pull: true
+  runs: bash
+  args:
+  - -c
+  - |
+    # download test data if it doesn't exist
+    if [[ ! -d ./data ]]; then
+      mkdir -p data
+      pushd data/
+      for i in $(seq 0 9); do
+        curl -LO https://users.soe.ucsc.edu/~jlefevre/skyhookdb/testdata/obj000000$i.bin
+      done
+      popd
+    fi
+
+    # boot a single-osd instance
+    ci/micro-osd.sh test
+
+    # copy conf to where test expects it (PWD)
+    cp test/ceph.conf ./
+
+    # run test
+    exec ceph_test_skyhook_query
+
+## push to registry
+#- uses: docker://docker:19.03.3
+#  secrets: [DOCKER_USERNAME, DOCKER_PASSWORD]
+#  runs: /bin/sh
+#  args:
+#  - -c
+#  - |
+#    docker login -u $DOCKER_USERNAME -p $DOCKER_PASSWORD
+#    docker push popperized/skyhookdm-libcls:luminous-bionic

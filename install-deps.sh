@@ -286,7 +286,7 @@ deb [arch=amd64] https://dl.bintray.com/apache/arrow/$(lsb_release --id --short 
 deb-src https://dl.bintray.com/apache/arrow/$(lsb_release --id --short | tr 'A-Z' 'a-z')/ $(lsb_release --codename --short) main
 APT_LINE
         $SUDO apt-get install -y devscripts equivs
-        $SUDO apt-get install -y dpkg-dev gcc libarrow-dev libarrow15 libparquet-dev
+        $SUDO apt-get install -y dpkg-dev gcc libarrow-dev libparquet-dev
         case "$VERSION" in
             *Trusty*)
                 ensure_decent_gcc_on_ubuntu 8 trusty

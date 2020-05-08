@@ -5745,16 +5745,24 @@ int convert_arrow_to_buffer(const std::shared_ptr<arrow::Table> &table, std::sha
 {
     // Initilization related to writing to the the file
     std::shared_ptr<arrow::ipc::RecordBatchWriter> writer;
-    std::shared_ptr<arrow::io::BufferOutputStream> out;
-    arrow::io::BufferOutputStream::Create(STREAM_CAPACITY, arrow::default_memory_pool(), &out);
-    arrow::io::OutputStream *raw_out = out.get();
-    arrow::Table *raw_table = table.get();
-    arrow::ipc::RecordBatchStreamWriter::Open(raw_out, raw_table->schema(), &writer);
+    arrow::Result<std::shared_ptr<arrow::io::BufferOutputStream>> out;
+    std::shared_ptr<arrow::io::BufferOutputStream> output;
+    out = arrow::io::BufferOutputStream::Create(STREAM_CAPACITY, arrow::default_memory_pool());
+    if (out.ok()) {
+        output = out.ValueOrDie();
+        arrow::io::OutputStream *raw_out = output.get();
+        arrow::Table *raw_table = table.get();
+        arrow::ipc::RecordBatchStreamWriter::Open(raw_out, raw_table->schema(), &writer);
+    }  
 
     // Initilization related to reading from arrow
     writer->WriteTable(*(table.get()));
     writer->Close();
-    out->Finish(buffer);
+    arrow::Result<std::shared_ptr<arrow::Buffer>> buff;
+    buff = output->Finish();
+    if (buff.ok()) {
+        *buffer = buff.ValueOrDie();
+    }
     return 0;
 }
 
@@ -6501,7 +6509,7 @@ long long int printArrowbufRowAsPyArrowBinary(
 
 
     // add buf len to output
-    int32_t buf_len = static_cast<int32_t>(datasz);
+    uint64_t buf_len = static_cast<uint64_t>(datasz);
     ss.write(reinterpret_cast<const char*>(&buf_len), sizeof(buf_len));
 
     // add const char* arrow buf
