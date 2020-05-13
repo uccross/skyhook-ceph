@@ -14,6 +14,7 @@
 #include "rgw_auth.h"
 #include "rgw_auth_s3.h"
 #include "rgw_swift_auth.h"
+#include "rgw_rest_sts.h"
 
 namespace rgw {
 namespace auth {
@@ -30,7 +31,7 @@ class StrategyRegistry {
     using s3_main_strategy_plain_t = \
       s3_strategy_t<rgw::auth::s3::AWSGeneralAbstractor, true>;
     using s3_main_strategy_boto2_t = \
-      s3_strategy_t<rgw::auth::s3::AWSGeneralBoto2Abstractor, true>;
+      s3_strategy_t<rgw::auth::s3::AWSGeneralBoto2Abstractor>;
 
     s3_main_strategy_plain_t s3_main_strategy_plain;
     s3_main_strategy_boto2_t s3_main_strategy_boto2;
@@ -55,13 +56,16 @@ class StrategyRegistry {
 
   rgw::auth::swift::DefaultStrategy swift_strategy;
 
+  rgw::auth::sts::DefaultStrategy sts_strategy;
+
 public:
   StrategyRegistry(CephContext* const cct,
                    ImplicitTenants& implicit_tenant_context,
                    RGWRados* const store)
     : s3_main_strategy(cct, implicit_tenant_context, store),
       s3_post_strategy(cct, implicit_tenant_context, store),
-      swift_strategy(cct, implicit_tenant_context, store) {
+      swift_strategy(cct, implicit_tenant_context, store),
+      sts_strategy(cct, store) {
   }
 
   const s3_main_strategy_t& get_s3_main() const {
@@ -74,6 +78,10 @@ public:
 
   const rgw::auth::swift::DefaultStrategy& get_swift() const {
     return swift_strategy;
+  }
+
+  const rgw::auth::sts::DefaultStrategy& get_sts() const {
+    return sts_strategy;
   }
 
   static std::shared_ptr<StrategyRegistry>

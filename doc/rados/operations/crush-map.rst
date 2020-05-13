@@ -9,9 +9,9 @@ through a centralized server or broker. With an algorithmically determined
 method of storing and retrieving data, Ceph avoids a single point of failure, a
 performance bottleneck, and a physical limit to its scalability.
 
-CRUSH requires a map of your cluster, and uses the CRUSH map to pseudo-randomly 
-store and retrieve data in OSDs with a uniform distribution of data across the 
-cluster. For a detailed discussion of CRUSH, see 
+CRUSH requires a map of your cluster, and uses the CRUSH map to pseudo-randomly
+store and retrieve data in OSDs with a uniform distribution of data across the
+cluster. For a detailed discussion of CRUSH, see
 `CRUSH - Controlled, Scalable, Decentralized Placement of Replicated Data`_
 
 CRUSH maps contain a list of :abbr:`OSDs (Object Storage Devices)`, a list of
@@ -51,8 +51,8 @@ Note:
 
 #. Note that the order of the keys does not matter.
 #. The key name (left of ``=``) must be a valid CRUSH ``type``.  By default
-   these include root, datacenter, room, row, pod, pdu, rack, chassis and host, 
-   but those types can be customized to be anything appropriate by modifying 
+   these include root, datacenter, room, row, pod, pdu, rack, chassis and host,
+   but those types can be customized to be anything appropriate by modifying
    the CRUSH map.
 #. Not all keys need to be specified.  For example, by default, Ceph
    automatically sets a ``ceph-osd`` daemon's location to be
@@ -61,7 +61,7 @@ Note:
 The crush location for an OSD is normally expressed via the ``crush location``
 config option being set in the ``ceph.conf`` file.  Each time the OSD starts,
 it verifies it is in the correct location in the CRUSH map and, if it is not,
-it moved itself.  To disable this automatic CRUSH map management, add the
+it moves itself.  To disable this automatic CRUSH map management, add the
 following to your configuration file in the ``[osd]`` section::
 
   osd crush update on start = false
@@ -71,16 +71,15 @@ Custom location hooks
 ---------------------
 
 A customized location hook can be used to generate a more complete
-crush location on startup. The sample ``ceph-crush-location`` utility
-will generate a CRUSH location string for a given daemon.  The
-location is based on, in order of preference:
+crush location on startup.  The crush location is based on, in order
+of preference:
 
 #. A ``crush location`` option in ceph.conf.
 #. A default of ``root=default host=HOSTNAME`` where the hostname is
    generated with the ``hostname -s`` command.
 
 This is not useful by itself, as the OSD itself has the exact same
-behavior.  However, the script can be modified to provide additional
+behavior.  However, a script can be written to provide additional
 location fields (for example, the rack or datacenter), and then the
 hook enabled via the config option::
 
@@ -89,10 +88,17 @@ hook enabled via the config option::
 This hook is passed several arguments (below) and should output a single line
 to stdout with the CRUSH location description.::
 
-  $ ceph-crush-location --cluster CLUSTER --id ID --type TYPE
+  --cluster CLUSTER --id ID --type TYPE
 
 where the cluster name is typically 'ceph', the id is the daemon
-identifier (the OSD number), and the daemon type is typically ``osd``.
+identifier (e.g., the OSD number or daemon identifier), and the daemon
+type is ``osd``, ``mds``, or similar.
+
+For example, a simple hook that additionally specified a rack location
+based on a hypothetical file ``/etc/rack`` might be::
+
+  #!/bin/sh
+  echo "host=$(hostname -s) rack=$(cat /etc/rack) root=default"
 
 
 CRUSH structure
@@ -116,7 +122,7 @@ cluster.  Devices are identified by an id (a non-negative integer) and
 a name, normally ``osd.N`` where ``N`` is the device id.
 
 Devices may also have a *device class* associated with them (e.g.,
-``hdd`` or ``ssd``), allowing them to be conveniently targetted by a
+``hdd`` or ``ssd``), allowing them to be conveniently targeted by a
 crush rule.
 
 Types and Buckets
@@ -148,19 +154,19 @@ leaves, interior nodes with non-device types, and a root node of type
 .. ditaa::
 
                         +-----------------+
-                        | {o}root default |
+                        |{o}root default  |
                         +--------+--------+
                                  |
-                 +---------------+---------------+             
+                 +---------------+---------------+
                  |                               |
-         +-------+-------+                 +-----+-------+
-         | {o}host foo   |                 | {o}host bar |
-         +-------+-------+                 +-----+-------+
-                 |                               | 
+          +------+------+                 +------+------+
+          |{o}host foo  |                 |{o}host bar  |
+          +------+------+                 +------+------+
+                 |                               |
          +-------+-------+               +-------+-------+
          |               |               |               |
    +-----+-----+   +-----+-----+   +-----+-----+   +-----+-----+
-   |  osd.0    |   |   osd.1   |   |   osd.2   |   |   osd.3   |
+   |   osd.0   |   |   osd.1   |   |   osd.2   |   |   osd.3   |
    +-----------+   +-----------+   +-----------+   +-----------+
 
 Each node (device or bucket) in the hierarchy has a *weight*
@@ -197,7 +203,7 @@ specifying the *pool type* they will be used for (replicated or
 erasure coded), the *failure domain*, and optionally a *device class*.
 In rare cases rules must be written by hand by manually editing the
 CRUSH map.
-   
+
 You can see what rules are defined for your cluster with::
 
   ceph osd crush rule ls
@@ -243,6 +249,11 @@ with::
 
   ceph osd crush tree --show-shadow
 
+For older clusters created before Luminous that relied on manually
+crafted CRUSH maps to maintain per-device-type hierarchies, there is a
+*reclassify* tool available to help transition to device classes
+without triggering data movement (see :ref:`crush-reclassify`).
+
 
 Weights sets
 ------------
@@ -273,7 +284,7 @@ There are two types of weight sets supported:
  #. A **per-pool** weight set is more flexible in that it allows
     placement to be optimized for each data pool.  Additionally,
     weights can be adjusted for each position of placement, allowing
-    the optimizer to correct for a suble skew of data toward devices
+    the optimizer to correct for a subtle skew of data toward devices
     with small weights relative to their peers (and effect that is
     usually only apparently in very large clusters but which can cause
     balancing problems).
@@ -313,7 +324,7 @@ Where:
 
 ``name``
 
-:Description: The full name of the OSD. 
+:Description: The full name of the OSD.
 :Type: String
 :Required: Yes
 :Example: ``osd.0``
@@ -337,7 +348,7 @@ Where:
 
 ``bucket-type``
 
-:Description: You may specify the OSD's location in the CRUSH hierarchy. 
+:Description: You may specify the OSD's location in the CRUSH hierarchy.
 :Type: Key/value pairs.
 :Required: No
 :Example: ``datacenter=dc1 room=room1 row=foo rack=bar host=foo-bar-1``
@@ -365,7 +376,7 @@ Where:
 
 ``name``
 
-:Description: The full name of the OSD. 
+:Description: The full name of the OSD.
 :Type: String
 :Required: Yes
 :Example: ``osd.0``
@@ -373,7 +384,7 @@ Where:
 
 ``weight``
 
-:Description: The CRUSH weight for the OSD. 
+:Description: The CRUSH weight for the OSD.
 :Type: Double
 :Required: Yes
 :Example: ``2.0``
@@ -396,7 +407,7 @@ Where:
 
 ``name``
 
-:Description: The full name of the OSD. 
+:Description: The full name of the OSD.
 :Type: String
 :Required: Yes
 :Example: ``osd.0``
@@ -458,7 +469,7 @@ Where:
 
 ``bucket-type``
 
-:Description: You may specify the bucket's location in the CRUSH hierarchy. 
+:Description: You may specify the bucket's location in the CRUSH hierarchy.
 :Type: Key/value pairs.
 :Required: No
 :Example: ``datacenter=dc1 room=room1 row=foo rack=bar host=foo-bar-1``
@@ -658,6 +669,8 @@ Rules that are not in use by pools can be deleted with::
   ceph osd crush rule rm {rule-name}
 
 
+.. _crush-map-tunables:
+
 Tunables
 ========
 
@@ -739,7 +752,7 @@ The new tunable is:
    CRUSH is sometimes unable to find a mapping.  The optimal value (in
    terms of computational cost and correctness) is 1.
 
-Migration impact: 
+Migration impact:
 
  * For existing clusters that have lots of existing data, changing
    from 0 to 1 will cause a lot of data to move; a value of 4 or 5
@@ -880,7 +893,7 @@ To make this warning go away, you have two options:
    For the change to take effect, you will need to restart the monitors, or
    apply the option to running monitors with::
 
-      ceph tell mon.\* injectargs --no-mon-warn-on-legacy-crush-tunables
+      ceph tell mon.\* config set mon_warn_on_legacy_crush_tunables false
 
 
 A few important points
@@ -895,7 +908,7 @@ A few important points
    effectively grandfathered in, and will misbehave if they do not
    support the new feature.
  * If the CRUSH tunables are set to non-legacy values and then later
-   changed back to the defult values, ``ceph-osd`` daemons will not be
+   changed back to the default values, ``ceph-osd`` daemons will not be
    required to support the feature.  However, the OSD peering process
    requires examining and understanding old maps.  Therefore, you
    should not run old versions of the ``ceph-osd`` daemon

@@ -8,6 +8,7 @@ import contextlib
 import logging
 import os
 
+from distutils.version import LooseVersion
 from teuthology import misc as teuthology
 from teuthology import contextutil
 from teuthology.config import config as teuth_config
@@ -23,15 +24,13 @@ def download(ctx, config):
     Download the Swift API.
     """
     testdir = teuthology.get_testdir(ctx)
-    assert isinstance(config, list)
+    assert isinstance(config, dict)
     log.info('Downloading swift...')
-    for client in config:
+    for (client, cconf) in config.items():
         ctx.cluster.only(client).run(
             args=[
-                'git',
-                'clone',
-                '--branch',
-                'ceph-luminous',
+                'git', 'clone',
+                '-b', cconf.get('force-branch', 'ceph-nautilus'),
                 teuth_config.ceph_git_base_url + 'swift.git',
                 '{tdir}/swift'.format(tdir=testdir),
                 ],
@@ -41,7 +40,7 @@ def download(ctx, config):
     finally:
         log.info('Removing swift...')
         testdir = teuthology.get_testdir(ctx)
-        for client in config:
+        for (client, _) in config.items():
             ctx.cluster.only(client).run(
                 args=[
                     'rm',
@@ -73,9 +72,8 @@ def create_users(ctx, config):
     log.info('Creating rgw users...')
     testdir = teuthology.get_testdir(ctx)
     users = {'': 'foo', '2': 'bar'}
-    for client in config['clients']:
+    for client, testswift_conf in config.iteritems():
         cluster_name, daemon_type, client_id = teuthology.split_role(client)
-        testswift_conf = config['testswift_conf'][client]
         for suffix, user in users.iteritems():
             _config_user(testswift_conf, '{user}.{client}'.format(user=user, client=client), user, suffix)
             ctx.cluster.only(client).run(
@@ -98,7 +96,7 @@ def create_users(ctx, config):
     try:
         yield
     finally:
-        for client in config['clients']:
+        for client in config.keys():
             for user in users.itervalues():
                 uid = '{user}.{client}'.format(user=user, client=client)
                 cluster_name, daemon_type, client_id = teuthology.split_role(client)
@@ -124,23 +122,7 @@ def configure(ctx, config):
     assert isinstance(config, dict)
     log.info('Configuring testswift...')
     testdir = teuthology.get_testdir(ctx)
-    for client, properties in config['clients'].iteritems():
-        log.info('client={c}'.format(c=client))
-        log.info('config={c}'.format(c=config))
-        testswift_conf = config['testswift_conf'][client]
-        if properties is not None and 'rgw_server' in properties:
-            host = None
-            for target, roles in zip(ctx.config['targets'].iterkeys(), ctx.config['roles']):
-                log.info('roles: ' + str(roles))
-                log.info('target: ' + str(target))
-                if properties['rgw_server'] in roles:
-                    _, host = split_user(target)
-            assert host is not None, "Invalid client specified as the rgw_server"
-            testswift_conf['func_test']['auth_host'] = host
-        else:
-            testswift_conf['func_test']['auth_host'] = 'localhost'
-
-        log.info(client)
+    for client, testswift_conf in config.iteritems():
         (remote,) = ctx.cluster.only(client).remotes.keys()
         remote.run(
             args=[
@@ -223,6 +205,7 @@ def task(ctx, config):
             client.1:
               extra_args: ['--exclude', 'TestFile']
     """
+    assert hasattr(ctx, 'rgw'), 'swift must run after the rgw task'
     assert config is None or isinstance(config, list) \
         or isinstance(config, dict), \
         "task testswift only supports a list or dictionary for configuration"
@@ -232,34 +215,42 @@ def task(ctx, config):
         config = all_clients
     if isinstance(config, list):
         config = dict.fromkeys(config)
-    clients = config.keys()
-
-    log.info('clients={c}'.format(c=clients))
 
     testswift_conf = {}
-    for client in clients:
+    clients = []
+    for client, client_config in config.iteritems():
+        # http://tracker.ceph.com/issues/40304 can't bootstrap on rhel 7.6+
+        (remote,) = ctx.cluster.only(client).remotes.keys()
+        if remote.os.name == 'rhel' and LooseVersion(remote.os.version) >= LooseVersion('7.6'):
+            log.warning('Swift tests cannot run on rhel 7.6+, skipping client {}'.format(client))
+            continue
+
+        clients.append(client)
+
+        server = client_config.get('rgw_server', client)
+        endpoint = ctx.rgw.role_endpoints.get(server)
+        assert endpoint, 'swift: no rgw endpoint for {}'.format(server)
+
         testswift_conf[client] = ConfigObj(
                 indent_type='',
                 infile={
                     'func_test':
                         {
-                        'auth_port'      : 7280,
-                        'auth_ssl' : 'no',
+                        'auth_host' : endpoint.hostname,
+                        'auth_port' : endpoint.port,
+                        'auth_ssl' : 'yes' if endpoint.cert else 'no',
                         'auth_prefix' : '/auth/',
                         },
                     }
                 )
+    # only take config for valid clients
+    config = {c: config[c] for c in clients}
 
+    log.info('clients={c}'.format(c=config.keys()))
     with contextutil.nested(
-        lambda: download(ctx=ctx, config=clients),
-        lambda: create_users(ctx=ctx, config=dict(
-                clients=clients,
-                testswift_conf=testswift_conf,
-                )),
-        lambda: configure(ctx=ctx, config=dict(
-                clients=config,
-                testswift_conf=testswift_conf,
-                )),
+        lambda: download(ctx=ctx, config=config),
+        lambda: create_users(ctx=ctx, config=testswift_conf),
+        lambda: configure(ctx=ctx, config=testswift_conf),
         lambda: run_tests(ctx=ctx, config=config),
         ):
         pass

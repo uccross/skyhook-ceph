@@ -15,17 +15,14 @@
 #include <stdlib.h>
 #include <limits.h>
 #include <sstream>
-#include <boost/regex.hpp>
+#include <regex>
 
-#include "include/assert.h"
+#include "include/ceph_assert.h"
 #include "include/stringify.h"
 
 #include "mon/Monitor.h"
-#include "mon/HealthService.h"
 #include "mon/HealthMonitor.h"
-#include "mon/DataHealthService.h"
 
-#include "messages/MMonHealth.h"
 #include "messages/MMonHealthChecks.h"
 
 #include "common/Formatter.h"
@@ -62,8 +59,8 @@ void HealthMonitor::update_from_paxos(bool *need_bootstrap)
   bufferlist qbl;
   mon->store->get(service_name, "quorum", qbl);
   if (qbl.length()) {
-    auto p = qbl.begin();
-    ::decode(quorum_checks, p);
+    auto p = qbl.cbegin();
+    decode(quorum_checks, p);
   } else {
     quorum_checks.clear();
   }
@@ -71,8 +68,8 @@ void HealthMonitor::update_from_paxos(bool *need_bootstrap)
   bufferlist lbl;
   mon->store->get(service_name, "leader", lbl);
   if (lbl.length()) {
-    auto p = lbl.begin();
-    ::decode(leader_checks, p);
+    auto p = lbl.cbegin();
+    decode(leader_checks, p);
   } else {
     leader_checks.clear();
   }
@@ -104,10 +101,10 @@ void HealthMonitor::encode_pending(MonitorDBStore::TransactionRef t)
   put_last_committed(t, version);
 
   bufferlist qbl;
-  ::encode(quorum_checks, qbl);
+  encode(quorum_checks, qbl);
   t->put(service_name, "quorum", qbl);
   bufferlist lbl;
-  ::encode(leader_checks, lbl);
+  encode(leader_checks, lbl);
   t->put(service_name, "leader", lbl);
 
   health_check_map_t pending_health;
@@ -121,20 +118,20 @@ void HealthMonitor::encode_pending(MonitorDBStore::TransactionRef t)
     pending_health.merge(p.second);
   }
   for (auto &p : pending_health.checks) {
-    p.second.summary = boost::regex_replace(
+    p.second.summary = std::regex_replace(
       p.second.summary,
-      boost::regex("%hasorhave%"),
+      std::regex("%hasorhave%"),
       names[p.first].size() > 1 ? "have" : "has");
-    p.second.summary = boost::regex_replace(
+    p.second.summary = std::regex_replace(
       p.second.summary,
-      boost::regex("%names%"), stringify(names[p.first]));
-    p.second.summary = boost::regex_replace(
+      std::regex("%names%"), stringify(names[p.first]));
+    p.second.summary = std::regex_replace(
       p.second.summary,
-      boost::regex("%plurals%"),
+      std::regex("%plurals%"),
       names[p.first].size() > 1 ? "s" : "");
-    p.second.summary = boost::regex_replace(
+    p.second.summary = std::regex_replace(
       p.second.summary,
-      boost::regex("%isorare%"),
+      std::regex("%isorare%"),
       names[p.first].size() > 1 ? "are" : "is");
   }
 
@@ -142,7 +139,7 @@ void HealthMonitor::encode_pending(MonitorDBStore::TransactionRef t)
   encode_health(pending_health, t);
 }
 
-version_t HealthMonitor::get_trim_to()
+version_t HealthMonitor::get_trim_to() const
 {
   // we don't actually need *any* old states, but keep a few.
   if (version > 5) {
@@ -162,17 +159,6 @@ bool HealthMonitor::prepare_update(MonOpRequestRef op)
   dout(7) << "prepare_update " << *m
 	  << " from " << m->get_orig_source_inst() << dendl;
   switch (m->get_type()) {
-  case MSG_MON_HEALTH:
-    {
-      MMonHealth *hm = static_cast<MMonHealth*>(op->get_req());
-      int service_type = hm->get_service_type();
-      if (services.count(service_type) == 0) {
-	dout(1) << __func__ << " service type " << service_type
-		<< " not registered -- drop message!" << dendl;
-	return false;
-      }
-      return services[service_type]->service_dispatch(op);
-    }
   case MSG_MON_HEALTH_CHECKS:
     return prepare_health_checks(op);
   default:
@@ -216,30 +202,30 @@ bool HealthMonitor::check_member_health()
 
   // snapshot of usage
   DataStats stats;
-  get_fs_stats(stats.fs_stats, g_conf->mon_data.c_str());
+  get_fs_stats(stats.fs_stats, g_conf()->mon_data.c_str());
   map<string,uint64_t> extra;
   uint64_t store_size = mon->store->get_estimated_size(extra);
-  assert(store_size > 0);
+  ceph_assert(store_size > 0);
   stats.store_stats.bytes_total = store_size;
   stats.store_stats.bytes_sst = extra["sst"];
   stats.store_stats.bytes_log = extra["log"];
   stats.store_stats.bytes_misc = extra["misc"];
   stats.last_update = ceph_clock_now();
   dout(10) << __func__ << " avail " << stats.fs_stats.avail_percent << "%"
-	   << " total " << prettybyte_t(stats.fs_stats.byte_total)
-	   << ", used " << prettybyte_t(stats.fs_stats.byte_used)
-	   << ", avail " << prettybyte_t(stats.fs_stats.byte_avail) << dendl;
+	   << " total " << byte_u_t(stats.fs_stats.byte_total)
+	   << ", used " << byte_u_t(stats.fs_stats.byte_used)
+	   << ", avail " << byte_u_t(stats.fs_stats.byte_avail) << dendl;
 
   // MON_DISK_{LOW,CRIT,BIG}
   health_check_map_t next;
-  if (stats.fs_stats.avail_percent <= g_conf->mon_data_avail_crit) {
+  if (stats.fs_stats.avail_percent <= g_conf()->mon_data_avail_crit) {
     stringstream ss, ss2;
     ss << "mon%plurals% %names% %isorare% very low on available space";
     auto& d = next.add("MON_DISK_CRIT", HEALTH_ERR, ss.str());
     ss2 << "mon." << mon->name << " has " << stats.fs_stats.avail_percent
 	<< "% avail";
     d.detail.push_back(ss2.str());
-  } else if (stats.fs_stats.avail_percent <= g_conf->mon_data_avail_warn) {
+  } else if (stats.fs_stats.avail_percent <= g_conf()->mon_data_avail_warn) {
     stringstream ss, ss2;
     ss << "mon%plurals% %names% %isorare% low on available space";
     auto& d = next.add("MON_DISK_LOW", HEALTH_WARN, ss.str());
@@ -247,14 +233,14 @@ bool HealthMonitor::check_member_health()
 	<< "% avail";
     d.detail.push_back(ss2.str());
   }
-  if (stats.store_stats.bytes_total >= g_conf->mon_data_size_warn) {
+  if (stats.store_stats.bytes_total >= g_conf()->mon_data_size_warn) {
     stringstream ss, ss2;
     ss << "mon%plurals% %names% %isorare% using a lot of disk space";
     auto& d = next.add("MON_DISK_BIG", HEALTH_WARN, ss.str());
     ss2 << "mon." << mon->name << " is "
-	<< prettybyte_t(stats.store_stats.bytes_total)
+	<< byte_u_t(stats.store_stats.bytes_total)
 	<< " >= mon_data_size_warn ("
-	<< prettybyte_t(g_conf->mon_data_size_warn) << ")";
+	<< byte_u_t(g_conf()->mon_data_size_warn) << ")";
     d.detail.push_back(ss2.str());
   }
 
@@ -272,8 +258,8 @@ bool HealthMonitor::check_member_health()
     // There's also the obvious drawback that if this is set on a single
     // monitor on a 3-monitor cluster, this warning will only be shown every
     // third monitor connection.
-    if (g_conf->mon_warn_on_osd_down_out_interval_zero &&
-        g_conf->mon_osd_down_out_interval == 0) {
+    if (g_conf()->mon_warn_on_osd_down_out_interval_zero &&
+        g_conf()->mon_osd_down_out_interval == 0) {
       ostringstream ss, ds;
       ss << "mon%plurals% %names% %hasorhave% mon_osd_down_out_interval set to 0";
       auto& d = next.add("OSD_NO_DOWN_OUT_INTERVAL", HEALTH_WARN, ss.str());
@@ -299,8 +285,7 @@ bool HealthMonitor::check_member_health()
     changed = true;
   } else {
     // tell the leader
-    mon->messenger->send_message(new MMonHealthChecks(next),
-                                 mon->monmap->get_inst(mon->get_leader()));
+    mon->send_mon_message(new MMonHealthChecks(next), mon->get_leader());
   }
 
   return changed;
@@ -341,7 +326,7 @@ bool HealthMonitor::check_leader_health()
 	if (q.count(i) == 0) {
 	  ostringstream ss;
 	  ss << "mon." << mon->monmap->get_name(i) << " (rank " << i
-	     << ") addr " << mon->monmap->get_addr(i)
+	     << ") addr " << mon->monmap->get_addrs(i)
 	     << " is down (out of quorum)";
 	  d.detail.push_back(ss.str());
 	}
@@ -353,19 +338,16 @@ bool HealthMonitor::check_leader_health()
   if (!mon->timecheck_skews.empty()) {
     list<string> warns;
     list<string> details;
-    for (map<entity_inst_t,double>::iterator i = mon->timecheck_skews.begin();
-	 i != mon->timecheck_skews.end(); ++i) {
-      entity_inst_t inst = i->first;
-      double skew = i->second;
-      double latency = mon->timecheck_latencies[inst];
-      string name = mon->monmap->get_name(inst.addr);
+    for (auto& i : mon->timecheck_skews) {
+      double skew = i.second;
+      double latency = mon->timecheck_latencies[i.first];
+      string name = mon->monmap->get_name(i.first);
       ostringstream tcss;
       health_status_t tcstatus = mon->timecheck_status(tcss, skew, latency);
       if (tcstatus != HEALTH_OK) {
 	warns.push_back(name);
 	ostringstream tmp_ss;
-	tmp_ss << "mon." << name
-	       << " addr " << inst.addr << " " << tcss.str()
+	tmp_ss << "mon." << name << " " << tcss.str()
 	       << " (latency " << latency << "s)";
 	details.push_back(tmp_ss.str());
       }
@@ -380,6 +362,28 @@ bool HealthMonitor::check_leader_health()
 	  ss << ",";
       }
       auto& d = next.add("MON_CLOCK_SKEW", HEALTH_WARN, ss.str());
+      d.detail.swap(details);
+    }
+  }
+
+  // MON_MSGR2_NOT_ENABLED
+  if (g_conf().get_val<bool>("ms_bind_msgr2") &&
+      g_conf().get_val<bool>("mon_warn_on_msgr2_not_enabled") &&
+      mon->monmap->get_required_features().contains_all(
+	ceph::features::mon::FEATURE_NAUTILUS)) {
+    list<string> details;
+    for (auto& i : mon->monmap->mon_info) {
+      if (!i.second.public_addrs.has_msgr2()) {
+	ostringstream ds;
+	ds << "mon." << i.first << " is not bound to a msgr2 port, only "
+	   << i.second.public_addrs;
+	details.push_back(ds.str());
+      }
+    }
+    if (!details.empty()) {
+      ostringstream ss;
+      ss << details.size() << " monitors have not enabled msgr2";
+      auto& d = next.add("MON_MSGR2_NOT_ENABLED", HEALTH_WARN, ss.str());
       d.detail.swap(details);
     }
   }

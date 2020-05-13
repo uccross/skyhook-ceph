@@ -7,7 +7,7 @@ assertions or other faults due to incompatible messages or other functional
 differences. For this reason, it's necessary during any cluster upgrade to
 reduce the number of active MDS for a file system to one first so that two
 active MDS do not communicate with different versions.  Further, it's also
-necessary to take standbys offline as any new CompatSet flags will propogate
+necessary to take standbys offline as any new CompatSet flags will propagate
 via the MDSMap to all MDS and cause older MDS to suicide.
 
 The proper sequence for upgrading the MDS cluster is:
@@ -18,11 +18,10 @@ The proper sequence for upgrading the MDS cluster is:
 
     ceph fs set <fs_name> max_mds 1
 
-2. Deactivate all non-zero ranks, from the highest rank to the lowest, while waiting for each MDS to finish stopping:
+2. Wait for cluster to stop non-zero ranks where only rank 0 is active and the rest are standbys.
 
 ::
 
-    ceph mds deactivate <fs_name>:<n>
     ceph status # wait for MDS to finish stopping
 
 3. Take all standbys offline, e.g. using systemctl:
@@ -30,17 +29,28 @@ The proper sequence for upgrading the MDS cluster is:
 ::
 
     systemctl stop ceph-mds.target
-    ceph status # confirm only one MDS is online and is active
 
-4. Upgrade the single active MDS, e.g. using systemctl:
+4. Confirm only one MDS is online and is rank 0 for your FS:
 
 ::
 
+    ceph status
+
+5. Upgrade the single active MDS, e.g. using systemctl:
+
+::
+
+    # use package manager to update cluster
     systemctl restart ceph-mds.target
 
-5. Upgrade/start the standby daemons.
+6. Upgrade/start the standby daemons.
 
-6. Restore the previous max_mds for your cluster:
+::
+
+    # use package manager to update cluster
+    systemctl restart ceph-mds.target
+
+7. Restore the previous max_mds for your cluster:
 
 ::
 

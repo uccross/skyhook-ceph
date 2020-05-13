@@ -18,6 +18,8 @@
 #include <map>
 #include <memory>
 
+#include "include/encoding.h"
+
 template <class Key, class T, class Map>
 class compact_map_base {
 protected:
@@ -181,7 +183,7 @@ public:
   }
   iterator erase (iterator p) {
     if (map) {
-      assert(this == p.map);
+      ceph_assert(this == p.map);
       auto it = map->erase(p.it);
       if (map->empty()) {
         free_internal();
@@ -296,23 +298,27 @@ public:
     return const_iterator(this, map->upper_bound(k));
   }
   void encode(bufferlist &bl) const {
+    using ceph::encode;
     if (map)
-      ::encode(*map, bl);
+      encode(*map, bl);
     else
-      ::encode((uint32_t)0, bl);
+      encode((uint32_t)0, bl);
   }
   void encode(bufferlist &bl, uint64_t features) const {
+    using ceph::encode;
     if (map)
-      ::encode(*map, bl, features);
+      encode(*map, bl, features);
     else
-      ::encode((uint32_t)0, bl);
+      encode((uint32_t)0, bl);
   }
-  void decode(bufferlist::iterator& p) {
+  void decode(bufferlist::const_iterator& p) {
+    using ceph::decode;
+    using ceph::decode_nohead;
     uint32_t n;
-    ::decode(n, p);
+    decode(n, p);
     if (n > 0) {
       alloc_internal();
-      ::decode_nohead(n, *map, p);
+      decode_nohead(n, *map, p);
     } else
       free_internal();
   }
@@ -328,7 +334,7 @@ inline void encode(const compact_map_base<Key, T, Map>& m, bufferlist& bl,
   m.encode(bl, features);
 }
 template<class Key, class T, class Map>
-inline void decode(compact_map_base<Key, T, Map>& m, bufferlist::iterator& p) {
+inline void decode(compact_map_base<Key, T, Map>& m, bufferlist::const_iterator& p) {
   m.decode(p);
 }
 

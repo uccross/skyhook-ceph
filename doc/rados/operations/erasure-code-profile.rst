@@ -1,3 +1,5 @@
+.. _erasure-code-profiles:
+
 =====================
 Erasure code profiles
 =====================
@@ -30,6 +32,7 @@ same time.
 	erasure-code-isa
 	erasure-code-lrc
 	erasure-code-shec
+	erasure-code-clay
 
 osd erasure-code-profile set
 ============================

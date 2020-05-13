@@ -30,27 +30,19 @@ def download(ctx, config):
     assert isinstance(config, dict)
     log.info('Downloading s3-tests...')
     testdir = teuthology.get_testdir(ctx)
-    s3_branches = [ 'giant', 'firefly', 'firefly-original', 'hammer' ]
-    for (client, cconf) in config.items():
-        branch = cconf.get('force-branch', None)
-        if not branch:
-            ceph_branch = ctx.config.get('branch')
-            suite_branch = ctx.config.get('suite_branch', ceph_branch)
-            if suite_branch in s3_branches:
-                branch = cconf.get('branch', suite_branch)
-	    else:
-                branch = cconf.get('branch', 'ceph-' + suite_branch)
-        if not branch:
+    for (client, client_config) in config.items():
+        s3tests_branch = client_config.get('force-branch', None)
+        if not s3tests_branch:
             raise ValueError(
-                "Could not determine what branch to use for s3tests!")
-        else:
-            log.info("Using branch '%s' for s3tests", branch)
-        sha1 = cconf.get('sha1')
-        git_remote = cconf.get('git_remote', None) or teuth_config.ceph_git_base_url
+                "Could not determine what branch to use for s3-tests. Please add 'force-branch: {s3-tests branch name}' to the .yaml config for this s3tests task.")
+
+        log.info("Using branch '%s' for s3tests", s3tests_branch)
+        sha1 = client_config.get('sha1')
+        git_remote = client_config.get('git_remote', teuth_config.ceph_git_base_url)
         ctx.cluster.only(client).run(
             args=[
                 'git', 'clone',
-                '-b', branch,
+                '-b', s3tests_branch,
                 git_remote + 's3-tests.git',
                 '{tdir}/s3-tests'.format(tdir=testdir),
                 ],
@@ -88,6 +80,9 @@ def _config_user(s3tests_conf, section, user):
     s3tests_conf[section].setdefault('display_name', 'Mr. {user}'.format(user=user))
     s3tests_conf[section].setdefault('access_key', ''.join(random.choice(string.uppercase) for i in xrange(20)))
     s3tests_conf[section].setdefault('secret_key', base64.b64encode(os.urandom(40)))
+    s3tests_conf[section].setdefault('totp_serial', ''.join(random.choice(string.digits) for i in xrange(10)))
+    s3tests_conf[section].setdefault('totp_seed', base64.b32encode(os.urandom(40)))
+    s3tests_conf[section].setdefault('totp_seconds', '5')
 
 
 @contextlib.contextmanager
@@ -121,6 +116,23 @@ def create_users(ctx, config):
                     '--access-key', s3tests_conf[section]['access_key'],
                     '--secret', s3tests_conf[section]['secret_key'],
                     '--email', s3tests_conf[section]['email'],
+                    '--cluster', cluster_name,
+                ],
+            )
+            ctx.cluster.only(client).run(
+                args=[
+                    'adjust-ulimits',
+                    'ceph-coverage',
+                    '{tdir}/archive/coverage'.format(tdir=testdir),
+                    'radosgw-admin',
+                    '-n', client_with_id,
+                    'mfa', 'create',
+                    '--uid', s3tests_conf[section]['user_id'],
+                    '--totp-serial', s3tests_conf[section]['totp_serial'],
+                    '--totp-seed', s3tests_conf[section]['totp_seed'],
+                    '--totp-seconds', s3tests_conf[section]['totp_seconds'],
+                    '--totp-window', '8',
+                    '--totp-seed-type', 'base32',
                     '--cluster', cluster_name,
                 ],
             )
@@ -160,7 +172,7 @@ def configure(ctx, config):
         s3tests_conf = config['s3tests_conf'][client]
         if properties is not None and 'rgw_server' in properties:
             host = None
-            for target, roles in zip(ctx.config['targets'].iterkeys(), ctx.config['roles']):
+            for target, roles in zip(ctx.config['targets'].keys(), ctx.config['roles']):
                 log.info('roles: ' + str(roles))
                 log.info('target: ' + str(target))
                 if properties['rgw_server'] in roles:
@@ -228,14 +240,22 @@ def run_tests(ctx, config):
     """
     assert isinstance(config, dict)
     testdir = teuthology.get_testdir(ctx)
-    attrs = ["!fails_on_rgw", "!lifecycle"]
-    # beast parser is strict about unreadable headers
-    if ctx.rgw.frontend == 'beast':
-        attrs.append("!fails_strict_rfc2616")
+    # civetweb > 1.8 && beast parsers are strict on rfc2616
+    attrs = ["!fails_on_rgw", "!lifecycle_expiration", "!fails_strict_rfc2616"]
     for client, client_config in config.iteritems():
+        (remote,) = ctx.cluster.only(client).remotes.keys()
         args = [
             'S3TEST_CONF={tdir}/archive/s3-tests.{client}.conf'.format(tdir=testdir, client=client),
-            'BOTO_CONFIG={tdir}/boto.cfg'.format(tdir=testdir),
+            'BOTO_CONFIG={tdir}/boto.cfg'.format(tdir=testdir)
+            ]
+        # the 'requests' library comes with its own ca bundle to verify ssl
+        # certificates - override that to use the system's ca bundle, which
+        # is where the ssl task installed this certificate
+        if remote.os.package_type == 'deb':
+            args += ['REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt']
+        else:
+            args += ['REQUESTS_CA_BUNDLE=/etc/pki/tls/certs/ca-bundle.crt']
+        args += [
             '{tdir}/s3-tests/virtualenv/bin/nosetests'.format(tdir=testdir),
             '-w',
             '{tdir}/s3-tests'.format(tdir=testdir),
@@ -245,7 +265,7 @@ def run_tests(ctx, config):
         if client_config is not None and 'extra_args' in client_config:
             args.extend(client_config['extra_args'])
 
-        ctx.cluster.only(client).run(
+        remote.run(
             args=args,
             label="s3 tests against rgw"
             )
@@ -312,7 +332,9 @@ def task(ctx, config):
         tasks:
         - ceph:
         - rgw: [client.0]
-        - s3tests: [client.0]
+        - s3tests:
+            client.0:
+              force-branch: ceph-nautilus
 
     To run against a server on client.1 and increase the boto timeout to 10m::
 
@@ -321,6 +343,7 @@ def task(ctx, config):
         - rgw: [client.1]
         - s3tests:
             client.0:
+              force-branch: ceph-nautilus
               rgw_server: client.1
               idle_timeout: 600
 
@@ -331,10 +354,13 @@ def task(ctx, config):
         - rgw: [client.0]
         - s3tests:
             client.0:
+              force-branch: ceph-nautilus
               extra_args: ['test_s3:test_object_acl_grand_public_read']
             client.1:
+              force-branch: ceph-nautilus
               extra_args: ['--exclude', 'test_100_continue']
     """
+    assert hasattr(ctx, 'rgw'), 's3tests must run after the rgw task'
     assert config is None or isinstance(config, list) \
         or isinstance(config, dict), \
         "task s3tests only supports a list or dictionary for configuration"
@@ -348,7 +374,7 @@ def task(ctx, config):
 
     overrides = ctx.config.get('overrides', {})
     # merge each client section, not the top level.
-    for client in config.iterkeys():
+    for client in config.keys():
         if not config[client]:
             config[client] = {}
         teuthology.deep_merge(config[client], overrides.get('s3tests', {}))
@@ -357,13 +383,17 @@ def task(ctx, config):
 
     s3tests_conf = {}
     for client in clients:
+        endpoint = ctx.rgw.role_endpoints.get(client)
+        assert endpoint, 's3tests: no rgw endpoint for {}'.format(client)
+
         s3tests_conf[client] = ConfigObj(
             indent_type='',
             infile={
                 'DEFAULT':
                     {
-                    'port'      : 7280,
-                    'is_secure' : 'no',
+                    'port'      : endpoint.port,
+                    'is_secure' : endpoint.cert is not None,
+                    'api_name'  : 'default',
                     },
                 'fixtures' : {},
                 's3 main'  : {},

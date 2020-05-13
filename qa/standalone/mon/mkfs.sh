@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # Copyright (C) 2013 Cloudwatt <libre.licensing@cloudwatt.com>
 # Copyright (C) 2014 Red Hat <contact@redhat.com>
@@ -28,11 +28,6 @@ CEPH_MON=127.0.0.1:7110 # git grep '\<7110\>' : there must be only one
 TIMEOUT=360
 
 EXTRAOPTS=""
-if [ -n "$CEPH_LIB" ]; then
-    EXTRAOPTS+=" --erasure-code-dir $CEPH_LIB"
-    EXTRAOPTS+=" --plugin-dir $CEPH_LIB"
-    EXTRAOPTS+=" --osd-class-dir $CEPH_LIB"
-fi
 
 function setup() {
     teardown

@@ -18,29 +18,32 @@ from teuthology.orchestra.connection import split_user
 
 log = logging.getLogger(__name__)
 
-
 @contextlib.contextmanager
 def download(ctx, config):
     """
     Download the s3 tests from the git builder.
     Remove downloaded s3 file upon exit.
-    
+
     The context passed in should be identical to the context
     passed in to the main task.
     """
     assert isinstance(config, dict)
     log.info('Downloading s3-tests...')
     testdir = teuthology.get_testdir(ctx)
-    for (client, cconf) in config.items():
-        branch = cconf.get('force-branch', None)
-        if not branch:
-            branch = cconf.get('branch', 'master')
-        sha1 = cconf.get('sha1')
+    for (client, client_config) in config.items():
+        s3tests_branch = client_config.get('force-branch', None)
+        if not s3tests_branch:
+            raise ValueError(
+                "Could not determine what branch to use for s3-tests. Please add 'force-branch: {s3-tests branch name}' to the .yaml config for this s3readwrite task.")
+
+        log.info("Using branch '%s' for s3tests", s3tests_branch)
+        sha1 = client_config.get('sha1')
+        git_remote = client_config.get('git_remote', teuth_config.ceph_git_base_url)
         ctx.cluster.only(client).run(
             args=[
                 'git', 'clone',
-                '-b', branch,
-                teuth_config.ceph_git_base_url + 's3-tests.git',
+                '-b', s3tests_branch,
+                git_remote + 's3-tests.git',
                 '{tdir}/s3-tests'.format(tdir=testdir),
                 ],
             )
@@ -168,7 +171,7 @@ def configure(ctx, config):
         s3tests_conf = config['s3tests_conf'][client]
         if properties is not None and 'rgw_server' in properties:
             host = None
-            for target, roles in zip(ctx.config['targets'].iterkeys(), ctx.config['roles']):
+            for target, roles in zip(ctx.config['targets'].keys(), ctx.config['roles']):
                 log.info('roles: ' + str(roles))
                 log.info('target: ' + str(target))
                 if properties['rgw_server'] in roles:
@@ -242,6 +245,7 @@ def task(ctx, config):
         - ceph:
         - rgw:
         - s3readwrite:
+            force-branch: ceph-nautilus
 
     To restrict testing to particular clients::
 
@@ -257,6 +261,7 @@ def task(ctx, config):
         - rgw: [client.1]
         - s3readwrite:
             client.0:
+              force-branch: ceph-nautilus
               rgw_server: client.1
 
     To pass extra test arguments
@@ -266,6 +271,7 @@ def task(ctx, config):
         - rgw: [client.0]
         - s3readwrite:
             client.0:
+              force-branch: ceph-nautilus
               readwrite:
                 bucket: mybucket
                 readers: 10
@@ -285,6 +291,7 @@ def task(ctx, config):
         - rgw: [client.0]
         - s3readwrite:
             client.0:
+              force-branch: ceph-nautilus
               s3:
                 user_id: myuserid
                 display_name: myname
@@ -293,9 +300,10 @@ def task(ctx, config):
                 secret_key: mysecretkey
 
     """
+    assert hasattr(ctx, 'rgw'), 's3readwrite must run after the rgw task'
     assert config is None or isinstance(config, list) \
         or isinstance(config, dict), \
-        "task s3tests only supports a list or dictionary for configuration"
+        "task s3readwrite only supports a list or dictionary for configuration"
     all_clients = ['client.{id}'.format(id=id_)
                    for id_ in teuthology.all_roles_of_type(ctx.cluster, 'client')]
     if config is None:
@@ -306,7 +314,7 @@ def task(ctx, config):
 
     overrides = ctx.config.get('overrides', {})
     # merge each client section, not the top level.
-    for client in config.iterkeys():
+    for client in config.keys():
         if not config[client]:
             config[client] = {}
         teuthology.deep_merge(config[client], overrides.get('s3readwrite', {}))
@@ -319,12 +327,14 @@ def task(ctx, config):
             config[client] = {}
         config[client].setdefault('s3', {})
         config[client].setdefault('readwrite', {})
+        endpoint = ctx.rgw.role_endpoints.get(client)
+        assert endpoint, 's3readwrite: no rgw endpoint for {}'.format(client)
 
         s3tests_conf[client] = ({
                 'DEFAULT':
                     {
-                    'port'      : 7280,
-                    'is_secure' : False,
+                    'port'      : endpoint.port,
+                    'is_secure' : endpoint.cert is not None,
                     },
                 'readwrite' : config[client]['readwrite'],
                 's3'  : config[client]['s3'],

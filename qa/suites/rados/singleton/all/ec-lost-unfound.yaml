@@ -21,4 +21,6 @@ tasks:
       - \(OSD_
       - \(PG_
       - \(OBJECT_
+      - \(SLOW_OPS\)
+      - slow request
 - ec_lost_unfound:

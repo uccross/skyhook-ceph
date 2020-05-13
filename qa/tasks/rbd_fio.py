@@ -78,7 +78,8 @@ def get_ioengine_package_name(ioengine, remote):
 def run_rbd_map(remote, image, iodepth):
     iodepth = max(iodepth, 128)  # RBD_QUEUE_DEPTH_DEFAULT
     out = StringIO.StringIO()
-    remote.run(args=['sudo', 'rbd', 'map', '-o', 'queue_depth={}'.format(iodepth), image], stdout=out)
+    remote.run(args=['sudo', 'rbd', 'device', 'map', '-o',
+                     'queue_depth={}'.format(iodepth), image], stdout=out)
     dev = out.getvalue().rstrip('\n')
     teuthology.sudo_write_file(
         remote,
@@ -206,20 +207,21 @@ def run_fio(remote, config, rbd_test_dir):
         fio = "https://github.com/axboe/fio/archive/fio-" + fio_version + ".tar.gz"
         remote.run(args=['mkdir', run.Raw(rbd_test_dir),])
         remote.run(args=['cd' , run.Raw(rbd_test_dir),
-                         run.Raw(';'), 'wget' , fio , run.Raw(';'), run.Raw('tar -xvf fio*tar.gz'), run.Raw(';'),
-                         run.Raw('cd fio-fio*'), 'configure', run.Raw(';') ,'make'])
+                         run.Raw(';'), 'wget', fio, run.Raw(';'), run.Raw('tar -xvf fio*tar.gz'), run.Raw(';'),
+                         run.Raw('cd fio-fio*'), run.Raw(';'), './configure', run.Raw(';'), 'make'])
         remote.run(args=['ceph', '-s'])
         remote.run(args=[run.Raw('{tdir}/fio-fio-{v}/fio --showcmd {f}'.format(tdir=rbd_test_dir,v=fio_version,f=fio_config.name))])
         remote.run(args=['sudo', run.Raw('{tdir}/fio-fio-{v}/fio {f}'.format(tdir=rbd_test_dir,v=fio_version,f=fio_config.name))])
         remote.run(args=['ceph', '-s'])
     finally:
         out=StringIO.StringIO()
-        remote.run(args=['rbd','showmapped', '--format=json'], stdout=out)
+        remote.run(args=['rbd', 'device', 'list', '--format=json'], stdout=out)
         mapped_images = json.loads(out.getvalue())
         if mapped_images:
             log.info("Unmapping rbd images on {sn}".format(sn=sn))
-            for image in mapped_images.itervalues():
-                remote.run(args=['sudo', 'rbd', 'unmap', str(image['device'])])
+            for image in mapped_images:
+                remote.run(args=['sudo', 'rbd', 'device', 'unmap',
+                                 str(image['device'])])
         log.info("Cleaning up fio install")
         remote.run(args=['rm','-rf', run.Raw(rbd_test_dir)])
         if ioengine_pkg:

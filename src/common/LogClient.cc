@@ -16,13 +16,9 @@
 #include "include/str_map.h"
 #include "messages/MLog.h"
 #include "messages/MLogAck.h"
+#include "msg/Messenger.h"
 #include "mon/MonMap.h"
 #include "common/Graylog.h"
-
-#ifdef DARWIN
-#include <sys/param.h>
-#include <sys/mount.h>
-#endif // DARWIN
 
 #define dout_subsys ceph_subsys_monc
 
@@ -39,56 +35,63 @@ int parse_log_client_options(CephContext *cct,
 {
   ostringstream oss;
 
-  int r = get_conf_str_map_helper(cct->_conf->clog_to_monitors, oss,
-                                  &log_to_monitors, CLOG_CONFIG_DEFAULT_KEY);
+  int r = get_conf_str_map_helper(
+    cct->_conf.get_val<string>("clog_to_monitors"), oss,
+    &log_to_monitors, CLOG_CONFIG_DEFAULT_KEY);
   if (r < 0) {
     lderr(cct) << __func__ << " error parsing 'clog_to_monitors'" << dendl;
     return r;
   }
 
-  r = get_conf_str_map_helper(cct->_conf->clog_to_syslog, oss,
+  r = get_conf_str_map_helper(
+    cct->_conf.get_val<string>("clog_to_syslog"), oss,
                               &log_to_syslog, CLOG_CONFIG_DEFAULT_KEY);
   if (r < 0) {
     lderr(cct) << __func__ << " error parsing 'clog_to_syslog'" << dendl;
     return r;
   }
 
-  r = get_conf_str_map_helper(cct->_conf->clog_to_syslog_facility, oss,
-                              &log_channels, CLOG_CONFIG_DEFAULT_KEY);
+  r = get_conf_str_map_helper(
+    cct->_conf.get_val<string>("clog_to_syslog_facility"), oss,
+    &log_channels, CLOG_CONFIG_DEFAULT_KEY);
   if (r < 0) {
     lderr(cct) << __func__ << " error parsing 'clog_to_syslog_facility'" << dendl;
     return r;
   }
 
-  r = get_conf_str_map_helper(cct->_conf->clog_to_syslog_level, oss,
-                              &log_prios, CLOG_CONFIG_DEFAULT_KEY);
+  r = get_conf_str_map_helper(
+    cct->_conf.get_val<string>("clog_to_syslog_level"), oss,
+    &log_prios, CLOG_CONFIG_DEFAULT_KEY);
   if (r < 0) {
     lderr(cct) << __func__ << " error parsing 'clog_to_syslog_level'" << dendl;
     return r;
   }
 
-  r = get_conf_str_map_helper(cct->_conf->clog_to_graylog, oss,
-                              &log_to_graylog, CLOG_CONFIG_DEFAULT_KEY);
+  r = get_conf_str_map_helper(
+    cct->_conf.get_val<string>("clog_to_graylog"), oss,
+    &log_to_graylog, CLOG_CONFIG_DEFAULT_KEY);
   if (r < 0) {
     lderr(cct) << __func__ << " error parsing 'clog_to_graylog'" << dendl;
     return r;
   }
 
-  r = get_conf_str_map_helper(cct->_conf->clog_to_graylog_host, oss,
-                              &log_to_graylog_host, CLOG_CONFIG_DEFAULT_KEY);
+  r = get_conf_str_map_helper(
+    cct->_conf.get_val<string>("clog_to_graylog_host"), oss,
+    &log_to_graylog_host, CLOG_CONFIG_DEFAULT_KEY);
   if (r < 0) {
     lderr(cct) << __func__ << " error parsing 'clog_to_graylog_host'" << dendl;
     return r;
   }
 
-  r = get_conf_str_map_helper(cct->_conf->clog_to_graylog_port, oss,
-                              &log_to_graylog_port, CLOG_CONFIG_DEFAULT_KEY);
+  r = get_conf_str_map_helper(
+    cct->_conf.get_val<string>("clog_to_graylog_port"), oss,
+    &log_to_graylog_port, CLOG_CONFIG_DEFAULT_KEY);
   if (r < 0) {
     lderr(cct) << __func__ << " error parsing 'clog_to_graylog_port'" << dendl;
     return r;
   }
 
-  fsid = cct->_conf->get_val<uuid_d>("fsid");
+  fsid = cct->_conf.get_val<uuid_d>("fsid");
   host = cct->_conf->host;
   return 0;
 }
@@ -104,7 +107,7 @@ static ostream& _prefix(std::ostream *_dout, LogChannel *lc) {
 }
 
 LogChannel::LogChannel(CephContext *cct, LogClient *lc, const string &channel)
-  : cct(cct), parent(lc), channel_lock("LogChannel::channel_lock"),
+  : cct(cct), parent(lc),
     log_channel(channel), log_to_syslog(false), log_to_monitors(false)
 {
 }
@@ -112,7 +115,7 @@ LogChannel::LogChannel(CephContext *cct, LogClient *lc, const string &channel)
 LogChannel::LogChannel(CephContext *cct, LogClient *lc,
                        const string &channel, const string &facility,
                        const string &prio)
-  : cct(cct), parent(lc), channel_lock("LogChannel::channel_lock"),
+  : cct(cct), parent(lc),
     log_channel(channel), log_prio(prio), syslog_facility(facility),
     log_to_syslog(false), log_to_monitors(false)
 {
@@ -121,7 +124,7 @@ LogChannel::LogChannel(CephContext *cct, LogClient *lc,
 LogClient::LogClient(CephContext *cct, Messenger *m, MonMap *mm,
 		     enum logclient_flag_t flags)
   : cct(cct), messenger(m), monmap(mm), is_mon(flags & FLAG_MON),
-    log_lock("LogClient::log_lock"), last_log_sent(0), last_log(0)
+    last_log_sent(0), last_log(0)
 {
 }
 
@@ -216,14 +219,18 @@ void LogChannel::do_log(clog_type prio, std::stringstream& ss)
 
 void LogChannel::do_log(clog_type prio, const std::string& s)
 {
-  Mutex::Locker l(channel_lock);
-  int lvl = (prio == CLOG_ERROR ? -1 : 0);
-  ldout(cct,lvl) << "log " << prio << " : " << s << dendl;
+  std::lock_guard l(channel_lock);
+  if (CLOG_ERROR == prio) {
+    ldout(cct,-1) << "log " << prio << " : " << s << dendl;
+  } else {
+    ldout(cct,0) << "log " << prio << " : " << s << dendl;
+  }
   LogEntry e;
   e.stamp = ceph_clock_now();
   // seq and who should be set for syslog/graylog/log_to_mon
-  e.who = parent->get_myinst();
+  e.addrs = parent->get_myaddrs();
   e.name = parent->get_myname();
+  e.rank = parent->get_myrank();
   e.prio = prio;
   e.msg = s;
   e.channel = get_log_channel();
@@ -250,7 +257,7 @@ void LogChannel::do_log(clog_type prio, const std::string& s)
 
 Message *LogClient::get_mon_log_message(bool flush)
 {
-  Mutex::Locker l(log_lock);
+  std::lock_guard l(log_lock);
   if (flush) {
     if (log_queue.empty())
       return nullptr;
@@ -262,13 +269,13 @@ Message *LogClient::get_mon_log_message(bool flush)
 
 bool LogClient::are_pending()
 {
-  Mutex::Locker l(log_lock);
+  std::lock_guard l(log_lock);
   return last_log > last_log_sent;
 }
 
 Message *LogClient::_get_mon_log_message()
 {
-  assert(log_lock.is_locked());
+  ceph_assert(ceph_mutex_is_locked(log_lock));
   if (log_queue.empty())
     return NULL;
 
@@ -283,7 +290,7 @@ Message *LogClient::_get_mon_log_message()
   unsigned num_unsent = last_log - last_log_sent;
   unsigned num_send;
   if (cct->_conf->mon_client_max_log_entries_per_message > 0)
-    num_send = MIN(num_unsent, (unsigned)cct->_conf->mon_client_max_log_entries_per_message);
+    num_send = std::min(num_unsent, (unsigned)cct->_conf->mon_client_max_log_entries_per_message);
   else
     num_send = num_unsent;
 
@@ -291,15 +298,15 @@ Message *LogClient::_get_mon_log_message()
 		<< " num " << log_queue.size()
 		<< " unsent " << num_unsent
 		<< " sending " << num_send << dendl;
-  assert(num_unsent <= log_queue.size());
+  ceph_assert(num_unsent <= log_queue.size());
   std::deque<LogEntry>::iterator p = log_queue.begin();
   std::deque<LogEntry> o;
   while (p->seq <= last_log_sent) {
     ++p;
-    assert(p != log_queue.end());
+    ceph_assert(p != log_queue.end());
   }
   while (num_send--) {
-    assert(p != log_queue.end());
+    ceph_assert(p != log_queue.end());
     o.push_back(*p);
     last_log_sent = p->seq;
     ldout(cct,10) << " will send " << *p << dendl;
@@ -314,17 +321,17 @@ Message *LogClient::_get_mon_log_message()
 
 void LogClient::_send_to_mon()
 {
-  assert(log_lock.is_locked());
-  assert(is_mon);
-  assert(messenger->get_myname().is_mon());
-  ldout(cct,10) << __func__ << "log to self" << dendl;
+  ceph_assert(ceph_mutex_is_locked(log_lock));
+  ceph_assert(is_mon);
+  ceph_assert(messenger->get_myname().is_mon());
+  ldout(cct,10) << __func__ << " log to self" << dendl;
   Message *log = _get_mon_log_message();
   messenger->get_loopback_connection()->send_message(log);
 }
 
 version_t LogClient::queue(LogEntry &entry)
 {
-  Mutex::Locker l(log_lock);
+  std::lock_guard l(log_lock);
   entry.seq = ++last_log;
   log_queue.push_back(entry);
 
@@ -337,13 +344,18 @@ version_t LogClient::queue(LogEntry &entry)
 
 uint64_t LogClient::get_next_seq()
 {
-  Mutex::Locker l(log_lock);
+  std::lock_guard l(log_lock);
   return ++last_log;
 }
 
-const entity_inst_t& LogClient::get_myinst()
+entity_addrvec_t LogClient::get_myaddrs()
 {
-  return messenger->get_myinst();
+  return messenger->get_myaddrs();
+}
+
+entity_name_t LogClient::get_myrank()
+{
+  return messenger->get_myname();
 }
 
 const EntityName& LogClient::get_myname()
@@ -353,7 +365,7 @@ const EntityName& LogClient::get_myname()
 
 bool LogClient::handle_log_ack(MLogAck *m)
 {
-  Mutex::Locker l(log_lock);
+  std::lock_guard l(log_lock);
   ldout(cct,10) << "handle_log_ack " << *m << dendl;
 
   version_t last = m->last;

@@ -38,7 +38,7 @@ struct GetMirrorImageIdRequest<librbd::MockTestImageCtx> {
                                          const std::string& global_image_id,
                                          std::string* image_id,
                                          Context* on_finish) {
-    assert(s_instance != nullptr);
+    ceph_assert(s_instance != nullptr);
     s_instance->image_id = image_id;
     s_instance->on_finish = on_finish;
     return s_instance;
@@ -108,7 +108,7 @@ public:
     mirror_image.global_image_id = global_id;
 
     bufferlist bl;
-    ::encode(mirror_image, bl);
+    encode(mirror_image, bl);
 
     EXPECT_CALL(get_mock_io_ctx(io_ctx),
                 exec(RBD_MIRRORING, _, StrEq("rbd"), StrEq("mirror_image_get"), _, _, _))

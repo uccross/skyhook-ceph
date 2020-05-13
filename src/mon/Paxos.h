@@ -162,7 +162,7 @@ enum {
 
 // i am one state machine.
 /**
- * This libary is based on the Paxos algorithm, but varies in a few key ways:
+ * This library is based on the Paxos algorithm, but varies in a few key ways:
  *  1- Only a single new value is generated at a time, simplifying the recovery logic.
  *  2- Nodes track "committed" values, and share them generously (and trustingly)
  *  3- A 'leasing' mechanism is built-in, allowing nodes to determine when it is 
@@ -572,15 +572,6 @@ private:
    *	      not on the active state, or if the lease has expired.
    */
   list<Context*> waiting_for_writeable;
-  /**
-   * List of callbacks waiting for a commit to finish.
-   *
-   * @remarks This may be used to a) wait for an on-going commit to finish
-   *	      before we proceed with, say, a new proposal; or b) wait for the
-   *	      next commit to be finished so we are sure that our value was
-   *	      fully committed.
-   */
-  list<Context*> waiting_for_commit;
 
   /**
    * Pending proposal transaction
@@ -606,6 +597,15 @@ private:
    * this list.  When it commits, these finishers are notified.
    */
   list<Context*> committing_finishers;
+  /**
+   * This function re-triggers pending_ and committing_finishers
+   * safely, so as to maintain existing system invariants. In particular
+   * we maintain ordering by triggering committing before pending, and
+   * we clear out pending_finishers prior to any triggers so that
+   * we don't trigger asserts on them being empty. You should
+   * use it instead of sending -EAGAIN to them with finish_contexts.
+   */
+  void reset_pending_committing_finishers();
 
   /**
    * @defgroup Paxos_h_sync_warns Synchronization warnings
@@ -1158,7 +1158,7 @@ public:
   static void decode_append_transaction(MonitorDBStore::TransactionRef t,
 					bufferlist& bl) {
     auto vt(std::make_shared<MonitorDBStore::Transaction>());
-    bufferlist::iterator it = bl.begin();
+    auto it = bl.cbegin();
     vt->decode(it);
     t->append(vt);
   }
@@ -1203,7 +1203,7 @@ public:
    */
   bool should_trim() {
     int available_versions = get_version() - get_first_committed();
-    int maximum_versions = g_conf->paxos_min + g_conf->paxos_trim_min;
+    int maximum_versions = g_conf()->paxos_min + g_conf()->paxos_trim_min;
 
     if (trimming || (available_versions <= maximum_versions))
       return false;
@@ -1215,11 +1215,11 @@ public:
     return plugged;
   }
   void plug() {
-    assert(plugged == false);
+    ceph_assert(plugged == false);
     plugged = true;
   }
   void unplug() {
-    assert(plugged == true);
+    ceph_assert(plugged == true);
     plugged = false;
   }
 
@@ -1275,7 +1275,7 @@ public:
    * @param onreadable A callback
    */
   void wait_for_readable(MonOpRequestRef op, Context *onreadable) {
-    assert(!is_readable());
+    ceph_assert(!is_readable());
     if (op)
       op->mark_event("paxos:wait_for_readable");
     waiting_for_readable.push_back(onreadable);
@@ -1317,7 +1317,7 @@ public:
    * @param c A callback
    */
   void wait_for_writeable(MonOpRequestRef op, Context *c) {
-    assert(!is_writeable());
+    ceph_assert(!is_writeable());
     if (op)
       op->mark_event("paxos:wait_for_writeable");
     waiting_for_writeable.push_back(c);
@@ -1351,25 +1351,6 @@ public:
    * something) that will be deferred (e.g., until the current round finishes).
    */
   bool trigger_propose();
-
-  /**
-   * Add oncommit to the back of the list of callbacks waiting for us to
-   * finish committing.
-   *
-   * @param oncommit A callback
-   */
-  void wait_for_commit(Context *oncommit) {
-    waiting_for_commit.push_back(oncommit);
-  }
-  /**
-   * Add oncommit to the front of the list of callbacks waiting for us to
-   * finish committing.
-   *
-   * @param oncommit A callback
-   */
-  void wait_for_commit_front(Context *oncommit) {
-    waiting_for_commit.push_front(oncommit);
-  }
   /**
    * @}
    */
@@ -1388,7 +1369,7 @@ inline ostream& operator<<(ostream& out, Paxos::C_Proposal& p)
       << " queued " << (ceph_clock_now() - p.proposal_time)
       << " tx dump:\n";
   auto t(std::make_shared<MonitorDBStore::Transaction>());
-  bufferlist::iterator p_it = p.bl.begin();
+  auto p_it = p.bl.cbegin();
   t->decode(p_it);
   JSONFormatter f(true);
   t->dump(&f);

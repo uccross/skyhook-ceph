@@ -14,9 +14,11 @@ struct SnapRealmInfo {
   vector<snapid_t> prior_parent_snaps;  // before parent_since
 
   SnapRealmInfo() {
+    // FIPS zeroization audit 20191115: this memset is not security related.
     memset(&h, 0, sizeof(h));
   }
   SnapRealmInfo(inodeno_t ino_, snapid_t created_, snapid_t seq_, snapid_t current_parent_since_) {
+    // FIPS zeroization audit 20191115: this memset is not security related.
     memset(&h, 0, sizeof(h));
     h.ino = ino_;
     h.created = created_;
@@ -31,7 +33,7 @@ struct SnapRealmInfo {
   snapid_t created() const { return snapid_t(h.created); }
 
   void encode(bufferlist& bl) const;
-  void decode(bufferlist::iterator& bl);
+  void decode(bufferlist::const_iterator& bl);
   void dump(Formatter *f) const;
   static void generate_test_instances(list<SnapRealmInfo*>& o);
 };
@@ -54,12 +56,14 @@ struct SnapContext {
   bool empty() { return seq == 0; }
 
   void encode(bufferlist& bl) const {
-    ::encode(seq, bl);
-    ::encode(snaps, bl);
+    using ceph::encode;
+    encode(seq, bl);
+    encode(snaps, bl);
   }
-  void decode(bufferlist::iterator& bl) {
-    ::decode(seq, bl);
-    ::decode(snaps, bl);
+  void decode(bufferlist::const_iterator& bl) {
+    using ceph::decode;
+    decode(seq, bl);
+    decode(snaps, bl);
   }
   void dump(Formatter *f) const;
   static void generate_test_instances(list<SnapContext*>& o);

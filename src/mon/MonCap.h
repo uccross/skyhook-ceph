@@ -80,15 +80,23 @@ struct MonCapGrant {
   std::string command;
   map<std::string,StringConstraint> command_args;
 
+  // restrict by network
+  std::string network;
+
+  // these are filled in by parse_network(), called by MonCap::parse()
+  entity_addr_t network_parsed;
+  unsigned network_prefix = 0;
+  bool network_valid = true;
+
+  void parse_network();
+
   mon_rwxa_t allow;
 
   // explicit grants that a profile grant expands to; populated as
   // needed by expand_profile() (via is_match()) and cached here.
   mutable list<MonCapGrant> profile_grants;
 
-  void expand_profile(int daemon_type, const EntityName& name) const;
-  void expand_profile_mon(const EntityName& name) const;
-  void expand_profile_mgr(const EntityName& name) const;
+  void expand_profile(const EntityName& name) const;
 
   MonCapGrant() : allow(0) {}
   // cppcheck-suppress noExplicitConstructor
@@ -111,7 +119,6 @@ struct MonCapGrant {
    * @return bits we allow
    */
   mon_rwxa_t get_allowed(CephContext *cct,
-			 int daemon_type, ///< CEPH_ENTITY_TYPE_*
 			 EntityName name,
 			 const std::string& service,
 			 const std::string& command,
@@ -133,7 +140,7 @@ struct MonCap {
   std::vector<MonCapGrant> grants;
 
   MonCap() {}
-  explicit MonCap(std::vector<MonCapGrant> g) : grants(g) {}
+  explicit MonCap(const std::vector<MonCapGrant> &g) : grants(g) {}
 
   string get_str() const {
     return text;
@@ -149,7 +156,6 @@ struct MonCap {
    * This method actually checks a description of a particular operation against
    * what the capability has specified.
    *
-   * @param daemon_type CEPH_ENTITY_TYPE_* for the service (MON or MGR)
    * @param service service name
    * @param command command id
    * @param command_args
@@ -159,14 +165,14 @@ struct MonCap {
    * @return true if the operation is allowed, false otherwise
    */
   bool is_capable(CephContext *cct,
-		  int daemon_type,
 		  EntityName name,
 		  const string& service,
 		  const string& command, const map<string,string>& command_args,
-		  bool op_may_read, bool op_may_write, bool op_may_exec) const;
+		  bool op_may_read, bool op_may_write, bool op_may_exec,
+		  const entity_addr_t& addr) const;
 
   void encode(bufferlist& bl) const;
-  void decode(bufferlist::iterator& bl);
+  void decode(bufferlist::const_iterator& bl);
   void dump(Formatter *f) const;
   static void generate_test_instances(list<MonCap*>& ls);
 };

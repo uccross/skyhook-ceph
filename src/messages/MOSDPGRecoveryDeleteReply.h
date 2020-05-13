@@ -5,11 +5,13 @@
 #define MOSDRECOVERYDELETEREPLY_H
 
 #include "MOSDFastDispatchOp.h"
-#include "include/ceph_features.h"
 
-struct MOSDPGRecoveryDeleteReply : public MOSDFastDispatchOp {
-  static const int HEAD_VERSION = 2;
-  static const int COMPAT_VERSION = 1;
+class MOSDPGRecoveryDeleteReply : public MessageInstance<MOSDPGRecoveryDeleteReply, MOSDFastDispatchOp> {
+public:
+  friend factory;
+
+  static constexpr int HEAD_VERSION = 2;
+  static constexpr int COMPAT_VERSION = 1;
 
   pg_shard_t from;
   spg_t pgid;
@@ -27,34 +29,28 @@ struct MOSDPGRecoveryDeleteReply : public MOSDFastDispatchOp {
   }
 
   MOSDPGRecoveryDeleteReply()
-    : MOSDFastDispatchOp(MSG_OSD_PG_RECOVERY_DELETE_REPLY, HEAD_VERSION, COMPAT_VERSION),
+    : MessageInstance(MSG_OSD_PG_RECOVERY_DELETE_REPLY, HEAD_VERSION, COMPAT_VERSION),
       map_epoch(0), min_epoch(0)
     {}
 
   void decode_payload() override {
-    bufferlist::iterator p = payload.begin();
-    ::decode(pgid.pgid, p);
-    ::decode(map_epoch, p);
-    if (header.version == 1 &&
-	!HAVE_FEATURE(get_connection()->get_features(), SERVER_LUMINOUS)) {
-      min_epoch = map_epoch;
-    } else {
-      ::decode(min_epoch, p);
-    }
-    ::decode(objects, p);
-    ::decode(pgid.shard, p);
-    ::decode(from, p);
+    auto p = payload.cbegin();
+    decode(pgid.pgid, p);
+    decode(map_epoch, p);
+    decode(min_epoch, p);
+    decode(objects, p);
+    decode(pgid.shard, p);
+    decode(from, p);
   }
 
   void encode_payload(uint64_t features) override {
-    ::encode(pgid.pgid, payload);
-    ::encode(map_epoch, payload);
-    if (HAVE_FEATURE(features, SERVER_LUMINOUS)) {
-      ::encode(min_epoch, payload);
-    }
-    ::encode(objects, payload);
-    ::encode(pgid.shard, payload);
-    ::encode(from, payload);
+    using ceph::encode;
+    encode(pgid.pgid, payload);
+    encode(map_epoch, payload);
+    encode(min_epoch, payload);
+    encode(objects, payload);
+    encode(pgid.shard, payload);
+    encode(from, payload);
   }
 
   void print(ostream& out) const override {
@@ -62,7 +58,7 @@ struct MOSDPGRecoveryDeleteReply : public MOSDFastDispatchOp {
         << " e" << map_epoch << "," << min_epoch << " " << objects << ")";
   }
 
-  const char *get_type_name() const override { return "recovery_delete_reply"; }
+  std::string_view get_type_name() const override { return "recovery_delete_reply"; }
 };
 
 #endif

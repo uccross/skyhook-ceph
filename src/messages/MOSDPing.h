@@ -32,10 +32,12 @@
 #include "osd/osd_types.h"
 
 
-class MOSDPing : public Message {
-
-  static const int HEAD_VERSION = 4;
-  static const int COMPAT_VERSION = 4;
+class MOSDPing : public MessageInstance<MOSDPing> {
+public:
+  friend factory;
+private:
+  static constexpr int HEAD_VERSION = 4;
+  static constexpr int COMPAT_VERSION = 4;
 
  public:
   enum {
@@ -65,63 +67,44 @@ class MOSDPing : public Message {
   uint32_t min_message_size;
 
   MOSDPing(const uuid_d& f, epoch_t e, __u8 o, utime_t s, uint32_t min_message)
-    : Message(MSG_OSD_PING, HEAD_VERSION, COMPAT_VERSION),
+    : MessageInstance(MSG_OSD_PING, HEAD_VERSION, COMPAT_VERSION),
       fsid(f), map_epoch(e), op(o), stamp(s), min_message_size(min_message)
   { }
   MOSDPing()
-    : Message(MSG_OSD_PING, HEAD_VERSION, COMPAT_VERSION), min_message_size(0)
+    : MessageInstance(MSG_OSD_PING, HEAD_VERSION, COMPAT_VERSION), min_message_size(0)
   {}
 private:
   ~MOSDPing() override {}
 
 public:
   void decode_payload() override {
-    bufferlist::iterator p = payload.begin();
-    ::decode(fsid, p);
-    ::decode(map_epoch, p);
-    if (header.version < 4) {
-      osd_peer_stat_t peer_stat;
-      epoch_t peer_as_of_epoch;
-      ::decode(peer_as_of_epoch, p);
-      ::decode(op, p);
-      ::decode(peer_stat, p);
-    } else {
-      ::decode(op, p);
-    }
-    ::decode(stamp, p);
-    if (header.version >= 3) {
-      int payload_mid_length = p.get_off();
-      uint32_t size;
-      ::decode(size, p);
-      p.advance(size);
-      min_message_size = size + payload_mid_length;
-    }
+    auto p = payload.cbegin();
+    decode(fsid, p);
+    decode(map_epoch, p);
+    decode(op, p);
+    decode(stamp, p);
+
+    int payload_mid_length = p.get_off();
+    uint32_t size;
+    decode(size, p);
+    p.advance(size);
+    min_message_size = size + payload_mid_length;
   }
   void encode_payload(uint64_t features) override {
-    ::encode(fsid, payload);
-    ::encode(map_epoch, payload);
-    
-    // with luminous, we drop peer_as_of_epoch and peer_stat
-    if (HAVE_FEATURE(features, SERVER_LUMINOUS)) {
-      header.version = HEAD_VERSION;
-      ::encode(op, payload);
-    } else {
-      epoch_t dummy_epoch = {};
-      osd_peer_stat_t dummy_stat = {};
-      header.version = 3;
-      header.compat_version = 2;
-      ::encode(dummy_epoch, payload);
-      ::encode(op, payload);   
-      ::encode(dummy_stat, payload);
-    }
-    ::encode(stamp, payload);
+    using ceph::encode;
+    encode(fsid, payload);
+    encode(map_epoch, payload);
+    encode(op, payload);
+    encode(stamp, payload);
+
     size_t s = 0;
-    if (min_message_size > payload.length())
+    if (min_message_size > payload.length()) {
       s = min_message_size - payload.length();
-    ::encode((uint32_t)s, payload);
+    }
+    encode((uint32_t)s, payload);
     if (s) {
       // this should be big enough for normal min_message padding sizes. since
-      // we are targetting jumbo ethernet frames around 9000 bytes, 16k should
+      // we are targeting jumbo ethernet frames around 9000 bytes, 16k should
       // be more than sufficient!  the compiler will statically zero this so
       // that at runtime we are only adding a bufferptr reference to it.
       static char zeros[16384] = {};
@@ -135,7 +118,7 @@ public:
     }
   }
 
-  const char *get_type_name() const override { return "osd_ping"; }
+  std::string_view get_type_name() const override { return "osd_ping"; }
   void print(ostream& out) const override {
     out << "osd_ping(" << get_op_name(op)
 	<< " e" << map_epoch
