@@ -20,9 +20,12 @@
 #include "osd/OSDMap.h"
 #include "include/ceph_features.h"
 
-class MOSDMap : public Message {
-
-  static const int HEAD_VERSION = 3;
+class MOSDMap : public MessageInstance<MOSDMap> {
+public:
+  friend factory;
+private:
+  static constexpr int HEAD_VERSION = 4;
+  static constexpr int COMPAT_VERSION = 3;
 
  public:
   uuid_d fsid;
@@ -30,6 +33,11 @@ class MOSDMap : public Message {
   map<epoch_t, bufferlist> maps;
   map<epoch_t, bufferlist> incremental_maps;
   epoch_t oldest_map =0, newest_map = 0;
+
+  // if we are fetching maps from the mon and have to jump a gap
+  // (client's next needed map is older than mon's oldest) we can
+  // share removed snaps from the gap here.
+  mempool::osdmap::map<int64_t,OSDMap::snap_interval_set_t> gap_removed_snaps;
 
   epoch_t get_first() const {
     epoch_t e = 0;
@@ -57,9 +65,9 @@ class MOSDMap : public Message {
   }
 
 
-  MOSDMap() : Message(CEPH_MSG_OSD_MAP, HEAD_VERSION) { }
+  MOSDMap() : MessageInstance(CEPH_MSG_OSD_MAP, HEAD_VERSION, COMPAT_VERSION) { }
   MOSDMap(const uuid_d &f, const uint64_t features)
-    : Message(CEPH_MSG_OSD_MAP, HEAD_VERSION),
+    : MessageInstance(CEPH_MSG_OSD_MAP, HEAD_VERSION, COMPAT_VERSION),
       fsid(f), encode_features(features),
       oldest_map(0), newest_map(0) { }
 private:
@@ -67,28 +75,36 @@ private:
 public:
   // marshalling
   void decode_payload() override {
-    bufferlist::iterator p = payload.begin();
-    ::decode(fsid, p);
-    ::decode(incremental_maps, p);
-    ::decode(maps, p);
+    auto p = payload.cbegin();
+    decode(fsid, p);
+    decode(incremental_maps, p);
+    decode(maps, p);
     if (header.version >= 2) {
-      ::decode(oldest_map, p);
-      ::decode(newest_map, p);
+      decode(oldest_map, p);
+      decode(newest_map, p);
     } else {
       oldest_map = 0;
       newest_map = 0;
     }
+    if (header.version >= 4) {
+      decode(gap_removed_snaps, p);
+    }
   }
   void encode_payload(uint64_t features) override {
+    using ceph::encode;
     header.version = HEAD_VERSION;
-    ::encode(fsid, payload);
+    header.compat_version = COMPAT_VERSION;
+    encode(fsid, payload);
     if (OSDMap::get_significant_features(encode_features) !=
          OSDMap::get_significant_features(features)) {
       if ((features & CEPH_FEATURE_PGID64) == 0 ||
-	  (features & CEPH_FEATURE_PGPOOL3) == 0)
+	  (features & CEPH_FEATURE_PGPOOL3) == 0) {
 	header.version = 1;  // old old_client version
-      else if ((features & CEPH_FEATURE_OSDENC) == 0)
+	header.compat_version = 1;
+      } else if ((features & CEPH_FEATURE_OSDENC) == 0) {
 	header.version = 2;  // old pg_pool_t
+	header.compat_version = 2;
+      }
 
       // reencode maps using old format
       //
@@ -99,7 +115,7 @@ public:
 	   p != incremental_maps.end();
 	   ++p) {
 	OSDMap::Incremental inc;
-	bufferlist::iterator q = p->second.begin();
+	auto q = p->second.cbegin();
 	inc.decode(q);
 	// always encode with subset of osdmaps canonical features
 	uint64_t f = inc.encode_features & features;
@@ -114,7 +130,7 @@ public:
 	if (inc.crush.length()) {
 	  // embedded crush map
 	  CrushWrapper c;
-	  auto p = inc.crush.begin();
+	  auto p = inc.crush.cbegin();
 	  c.decode(p);
 	  inc.crush.clear();
 	  c.encode(inc.crush, f);
@@ -132,19 +148,24 @@ public:
 	m.encode(p->second, f | CEPH_FEATURE_RESERVED);
       }
     }
-    ::encode(incremental_maps, payload);
-    ::encode(maps, payload);
+    encode(incremental_maps, payload);
+    encode(maps, payload);
     if (header.version >= 2) {
-      ::encode(oldest_map, payload);
-      ::encode(newest_map, payload);
+      encode(oldest_map, payload);
+      encode(newest_map, payload);
+    }
+    if (header.version >= 4) {
+      encode(gap_removed_snaps, payload);
     }
   }
 
-  const char *get_type_name() const override { return "osdmap"; }
+  std::string_view get_type_name() const override { return "osdmap"; }
   void print(ostream& out) const override {
     out << "osd_map(" << get_first() << ".." << get_last();
     if (oldest_map || newest_map)
       out << " src has " << oldest_map << ".." << newest_map;
+    if (!gap_removed_snaps.empty())
+      out << " +gap_removed_snaps";
     out << ")";
   }
 };

@@ -10,17 +10,14 @@
 #include <boost/container/flat_set.hpp>
 #include "common/sstring.hh"
 #include "common/ceph_json.h"
-#include "include/assert.h" /* needed because of common/ceph_json.h */
+#include "include/ceph_assert.h" /* needed because of common/ceph_json.h */
 #include "rgw_op.h"
 #include "rgw_formats.h"
 #include "rgw_client_io.h"
 
 extern std::map<std::string, std::string> rgw_to_http_attrs;
 
-extern string camelcase_dash_http_attr(const string& orig);
-extern string lowercase_dash_http_attr(const string& orig);
-
-extern void rgw_rest_init(CephContext *cct, RGWRados *store, RGWZoneGroup& zone_group);
+extern void rgw_rest_init(CephContext *cct, RGWRados *store, const RGWZoneGroup& zone_group);
 
 extern void rgw_flush_formatter_and_reset(struct req_state *s,
 					 ceph::Formatter *formatter);
@@ -28,24 +25,45 @@ extern void rgw_flush_formatter_and_reset(struct req_state *s,
 extern void rgw_flush_formatter(struct req_state *s,
 				ceph::Formatter *formatter);
 
-extern int rgw_rest_read_all_input(struct req_state *s, char **data, int *plen,
-				   uint64_t max_len, bool allow_chunked=true);
+std::tuple<int, bufferlist > rgw_rest_read_all_input(struct req_state *s,
+                                        const uint64_t max_len,
+                                        const bool allow_chunked=true);
+
+static inline boost::string_ref rgw_sanitized_hdrval(ceph::buffer::list& raw)
+{
+  /* std::string and thus boost::string_ref ARE OBLIGED to carry multiple
+   * 0x00 and count them to the length of a string. We need to take that
+   * into consideration and sanitize the size of a ceph::buffer::list used
+   * to store metadata values (x-amz-meta-*, X-Container-Meta-*, etags).
+   * Otherwise we might send 0x00 to clients. */
+  const char* const data = raw.c_str();
+  size_t len = raw.length();
+
+  if (len && data[len - 1] == '\0') {
+    /* That's the case - the null byte has been included at the last position
+     * of the bufferlist. We need to restore the proper string length we'll
+     * pass to string_ref. */
+    len--;
+  }
+
+  return boost::string_ref(data, len);
+}
 
 template <class T>
 int rgw_rest_get_json_input(CephContext *cct, req_state *s, T& out,
 			    uint64_t max_len, bool *empty)
 {
-  int rv, data_len;
-  char *data;
-
   if (empty)
     *empty = false;
 
-  if ((rv = rgw_rest_read_all_input(s, &data, &data_len, max_len)) < 0) {
+  int rv = 0;
+  bufferlist data;
+  std::tie(rv, data) = rgw_rest_read_all_input(s, max_len);
+  if (rv < 0) {
     return rv;
   }
 
-  if (!data_len) {
+  if (!data.length()) {
     if (empty) {
       *empty = true;
     }
@@ -55,12 +73,9 @@ int rgw_rest_get_json_input(CephContext *cct, req_state *s, T& out,
 
   JSONParser parser;
 
-  if (!parser.parse(data, data_len)) {
-    free(data);
+  if (!parser.parse(data.c_str(), data.length())) {
     return -EINVAL;
   }
-
-  free(data);
 
   try {
       decode_json_obj(out, &parser);
@@ -72,37 +87,32 @@ int rgw_rest_get_json_input(CephContext *cct, req_state *s, T& out,
 }
 
 template <class T>
-int rgw_rest_get_json_input_keep_data(CephContext *cct, req_state *s, T& out, uint64_t max_len, char **pdata, int *len)
+std::tuple<int, bufferlist > rgw_rest_get_json_input_keep_data(CephContext *cct, req_state *s, T& out, uint64_t max_len)
 {
-  int rv, data_len;
-  char *data;
-
-  if ((rv = rgw_rest_read_all_input(s, &data, &data_len, max_len)) < 0) {
-    return rv;
+  int rv = 0;
+  bufferlist data;
+  std::tie(rv, data) = rgw_rest_read_all_input(s, max_len);
+  if (rv < 0) {
+    return std::make_tuple(rv, std::move(data));
   }
 
-  if (!data_len) {
-    return -EINVAL;
+  if (!data.length()) {
+    return std::make_tuple(-EINVAL, std::move(data));
   }
-
-  *len = data_len;
 
   JSONParser parser;
 
-  if (!parser.parse(data, data_len)) {
-    free(data);
-    return -EINVAL;
+  if (!parser.parse(data.c_str(), data.length())) {
+    return std::make_tuple(-EINVAL, std::move(data));
   }
 
   try {
     decode_json_obj(out, &parser);
   } catch (JSONDecoder::err& e) {
-    free(data);
-    return -EINVAL;
+    return std::make_tuple(-EINVAL, std::move(data));
   }
 
-  *pdata = data;
-  return 0;
+  return std::make_tuple(0, std::move(data));
 }
 
 class RESTArgs {
@@ -463,6 +473,44 @@ public:
     ~RGWInfo_ObjStore() override = default;
 };
 
+class RGWPutBucketObjectLock_ObjStore : public RGWPutBucketObjectLock {
+public:
+  RGWPutBucketObjectLock_ObjStore() = default;
+  ~RGWPutBucketObjectLock_ObjStore() = default;
+  int get_params() override;
+};
+
+class RGWGetBucketObjectLock_ObjStore : public RGWGetBucketObjectLock {
+public:
+  RGWGetBucketObjectLock_ObjStore() = default;
+  ~RGWGetBucketObjectLock_ObjStore() override = default;
+};
+
+class RGWPutObjRetention_ObjStore : public RGWPutObjRetention {
+public:
+  RGWPutObjRetention_ObjStore() = default;
+  ~RGWPutObjRetention_ObjStore() override = default;
+};
+
+class RGWGetObjRetention_ObjStore : public RGWGetObjRetention {
+public:
+  RGWGetObjRetention_ObjStore() = default;
+  ~RGWGetObjRetention_ObjStore() = default;
+};
+
+class RGWPutObjLegalHold_ObjStore : public RGWPutObjLegalHold {
+public:
+  RGWPutObjLegalHold_ObjStore() = default;
+  ~RGWPutObjLegalHold_ObjStore() override = default;
+  int get_params() override;
+};
+
+class RGWGetObjLegalHold_ObjStore : public RGWGetObjLegalHold {
+public:
+  RGWGetObjLegalHold_ObjStore() = default;
+  ~RGWGetObjLegalHold_ObjStore() = default;
+};
+
 class RGWRESTOp : public RGWOp {
 protected:
   int http_ret;
@@ -478,6 +526,7 @@ public:
   virtual int check_caps(RGWUserCaps& caps)
     { return -EPERM; } /* should to be implemented! */
   int verify_permission() override;
+  dmc::client_id dmclock_client() override { return dmc::client_id::admin; }
 };
 
 class RGWHandler_REST : public RGWHandler {
@@ -492,9 +541,10 @@ protected:
   virtual RGWOp *op_copy() { return NULL; }
   virtual RGWOp *op_options() { return NULL; }
 
+public:
   static int allocate_formatter(struct req_state *s, int default_formatter,
 				bool configurable);
-public:
+
   static constexpr int MAX_BUCKET_NAME_LEN = 255;
   static constexpr int MAX_OBJ_NAME_LEN = 1024;
 
@@ -503,6 +553,7 @@ public:
 
   static int validate_bucket_name(const string& bucket);
   static int validate_object_name(const string& object);
+  static int reallocate_formatter(struct req_state *s, int type);
 
   int init_permissions(RGWOp* op) override;
   int read_permissions(RGWOp* op) override;
@@ -719,7 +770,7 @@ static inline void dump_header_if_nonempty(struct req_state* s,
 static inline std::string compute_domain_uri(const struct req_state *s) {
   std::string uri = (!s->info.domain.empty()) ? s->info.domain :
     [&s]() -> std::string {
-    auto env = *(s->info.env);
+    RGWEnv const &env(*(s->info.env));
     std::string uri =
     env.get("SERVER_PORT_SECURE") ? "https://" : "http://";
     if (env.exists("SERVER_NAME")) {
@@ -737,9 +788,6 @@ extern int64_t parse_content_length(const char *content_length);
 extern void dump_etag(struct req_state *s,
                       const boost::string_ref& etag,
                       bool quoted = false);
-extern void dump_etag(struct req_state *s,
-                      ceph::buffer::list& bl_etag,
-                      bool quoted = false);
 extern void dump_epoch_header(struct req_state *s, const char *name, real_time t);
 extern void dump_time_header(struct req_state *s, const char *name, real_time t);
 extern void dump_last_modified(struct req_state *s, real_time t);
@@ -752,7 +800,6 @@ extern void list_all_buckets_end(struct req_state *s);
 extern void dump_time(struct req_state *s, const char *name, real_time *t);
 extern std::string dump_time_to_str(const real_time& t);
 extern void dump_bucket_from_state(struct req_state *s);
-extern void dump_uri_from_state(struct req_state *s);
 extern void dump_redirect(struct req_state *s, const string& redirect);
 extern bool is_valid_url(const char *url);
 extern void dump_access_control(struct req_state *s, const char *origin,

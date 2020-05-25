@@ -1,12 +1,11 @@
-#!/bin/bash -e
+#!/usr/bin/env bash
+set -e
 
 source $(dirname $0)/../detect-build-env-vars.sh
 
 [ -z "$CEPH_ROOT" ] && CEPH_ROOT=..
 
 dir=$CEPH_ROOT/ceph-object-corpus
-
-set -e
 
 failed=0
 numtests=0
@@ -193,7 +192,7 @@ do_join() {
 
 # Using $MAX_PARALLEL_JOBS jobs if defined, unless the number of logical
 # processors
-if [ `uname` == FreeBSD ]; then
+if [ `uname` == FreeBSD -o `uname` == Darwin ]; then
   NPROC=`sysctl -n hw.ncpu`
   max_parallel_jobs=${MAX_PARALLEL_JOBS:-${NPROC}}
 else
@@ -232,5 +231,11 @@ if [ $failed -gt 0 ]; then
   echo "FAILED $failed / $numtests tests."
   exit 1
 fi
+
+if [ $numtests -eq 0 ]; then
+  echo "FAILED: no tests found to run!"
+  exit 1
+fi
+
 echo "passed $numtests tests."
 

@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 set -ex
 shopt -s nullglob # fns glob expansion in expect_alloc_hint_eq()
@@ -51,6 +51,7 @@ function setup_pgid() {
 }
 
 function expect_alloc_hint_eq() {
+    export CEPH_ARGS="--osd-objectstore=filestore"
     local expected_extsize="$1"
 
     for (( i = 0 ; i < "${NUM_OSDS}" ; i++ )); do

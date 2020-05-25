@@ -1,7 +1,7 @@
-restful plugin
+Restful Module
 ==============
 
-RESTful plugin offers the REST API access to the status of the cluster
+RESTful module offers the REST API access to the status of the cluster
 over an SSL-secured connection.
 
 Enabling
@@ -62,16 +62,16 @@ Since each ``ceph-mgr`` hosts its own instance of *restful*, it may
 also be necessary to configure them separately. The IP and port
 can be changed via the configuration key facility::
 
-  ceph config-key set mgr/restful/$name/server_addr $IP
-  ceph config-key set mgr/restful/$name/server_port $PORT
+  ceph config set mgr mgr/restful/$name/server_addr $IP
+  ceph config set mgr mgr/restful/$name/server_port $PORT
 
 where ``$name`` is the ID of the ceph-mgr daemon (usually the hostname).
 
 These settings can also be configured cluster-wide and not manager
 specific.  For example,::
 
-  ceph config-key set mgr/restful/server_addr $IP
-  ceph config-key set mgr/restful/server_port $PORT
+  ceph config set mgr mgr/restful/server_addr $IP
+  ceph config set mgr mgr/restful/server_port $PORT
 
 If the port is not configured, *restful* will bind to port ``8003``.
 If the address it not configured, the *restful* will bind to ``::``,

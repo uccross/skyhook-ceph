@@ -17,14 +17,22 @@
 
 from nose.tools import eq_ as eq
 from nose.tools import *
+from unittest import TestCase
 
-from ceph_argparse import validate_command, parse_json_funcsigs
+from ceph_argparse import validate_command, parse_json_funcsigs, validate, \
+    parse_funcsig, ArgumentError, ArgumentTooFew, ArgumentMissing, \
+    ArgumentNumber, ArgumentValid
 
 import os
+import random
 import re
+import string
 import sys
 import json
-from StringIO import StringIO
+try:
+    from StringIO import StringIO
+except ImportError:
+    from io import StringIO
 
 def get_command_descriptions(what):
     CEPH_BIN = os.environ['CEPH_BIN']
@@ -71,6 +79,12 @@ class TestArgparse:
                                                     'string',
                                                     'toomany']))
 
+    def check_0_or_1_string_arg(self, prefix, command):
+        self.assert_valid_command([prefix, command, 'string'])
+        self.assert_valid_command([prefix, command])
+        assert_equal({}, validate_command(sigdict, [prefix, command, 'string',
+                                                    'toomany']))
+
     def check_1_or_more_string_args(self, prefix, command):
         assert_equal({}, validate_command(sigdict, [prefix,
                                                     command]))
@@ -89,7 +103,7 @@ class TestArgparse:
                                                     command,
                                                     'toomany']))
 
-	def capture_output(self, args, stdout=None, stderr=None):
+    def capture_output(self, args, stdout=None, stderr=None):
         if stdout:
             stdout = StringIO()
             sys.stdout = stdout
@@ -361,41 +375,11 @@ class TestMDS(TestArgparse):
     def test_stat(self):
         self.check_no_arg('mds', 'stat')
 
-    def test_dump(self):
-        self.check_0_or_1_natural_arg('mds', 'dump')
-
-    def test_tell(self):
-        self.assert_valid_command(['mds', 'tell',
-                                   'someone',
-                                   'something'])
-        self.assert_valid_command(['mds', 'tell',
-                                   'someone',
-                                   'something',
-                                   'something else'])
-        assert_equal({}, validate_command(sigdict, ['mds', 'tell']))
-        assert_equal({}, validate_command(sigdict, ['mds', 'tell',
-                                                    'someone']))
-
     def test_compat_show(self):
         self.assert_valid_command(['mds', 'compat', 'show'])
         assert_equal({}, validate_command(sigdict, ['mds', 'compat']))
         assert_equal({}, validate_command(sigdict, ['mds', 'compat',
                                                     'show', 'toomany']))
-
-    def test_stop(self):
-        self.assert_valid_command(['mds', 'stop', 'someone'])
-        assert_equal({}, validate_command(sigdict, ['mds', 'stop']))
-        assert_equal({}, validate_command(sigdict, ['mds', 'stop',
-                                                    'someone', 'toomany']))
-
-    def test_deactivate(self):
-        self.assert_valid_command(['mds', 'deactivate', 'someone'])
-        assert_equal({}, validate_command(sigdict, ['mds', 'deactivate']))
-        assert_equal({}, validate_command(sigdict, ['mds', 'deactivate',
-                                                    'someone', 'toomany']))
-
-    def test_set_max_mds(self):
-        self.check_1_natural_arg('mds', 'set_max_mds')
 
     def test_set_state(self):
         self.assert_valid_command(['mds', 'set_state', '1', '2'])
@@ -425,12 +409,6 @@ class TestMDS(TestArgparse):
                                                     '--yes-i-really-mean-it',
                                                     'toomany']))
 
-    def test_cluster_down(self):
-        self.check_no_arg('mds', 'cluster_down')
-
-    def test_cluster_up(self):
-        self.check_no_arg('mds', 'cluster_up')
-
     def test_compat_rm_compat(self):
         self.assert_valid_command(['mds', 'compat', 'rm_compat', '1'])
         assert_equal({}, validate_command(sigdict, ['mds',
@@ -455,45 +433,6 @@ class TestMDS(TestArgparse):
                                                     'compat',
                                                     'rm_incompat', '1', '1']))
 
-    def test_mds_set(self):
-        self.assert_valid_command(['mds', 'set', 'max_mds', '2'])
-        self.assert_valid_command(['mds', 'set', 'max_file_size', '2'])
-        self.assert_valid_command(['mds', 'set', 'allow_new_snaps', 'no'])
-        assert_equal({}, validate_command(sigdict, ['mds',
-                                                    'set',
-                                                    'invalid']))
-
-    def test_add_data_pool(self):
-        self.assert_valid_command(['mds', 'add_data_pool', '1'])
-        self.assert_valid_command(['mds', 'add_data_pool', 'foo'])
-
-    def test_remove_data_pool(self):
-        self.assert_valid_command(['mds', 'remove_data_pool', '1'])
-        self.assert_valid_command(['mds', 'remove_data_pool', 'foo'])
-
-    def test_newfs(self):
-        self.assert_valid_command(['mds', 'newfs', '1', '2',
-                                   '--yes-i-really-mean-it'])
-        self.assert_valid_command(['mds', 'newfs', '1', '2'])
-        assert_equal({}, validate_command(sigdict, ['mds', 'newfs']))
-        assert_equal({}, validate_command(sigdict, ['mds', 'newfs', '1']))
-        assert_equal({}, validate_command(sigdict, ['mds',
-                                                    'newfs',
-                                                    '1',
-                                                    '2',
-                                                    '--yes-i-really-mean-it',
-                                                    'toomany']))
-        assert_equal({}, validate_command(sigdict, ['mds',
-                                                    'newfs',
-                                                    '-1',
-                                                    '2',
-                                                    '--yes-i-really-mean-it']))
-        assert_equal({}, validate_command(sigdict, ['mds',
-                                                    'newfs',
-                                                    '1',
-                                                    '-1',
-                                                    '--yes-i-really-mean-it']))
-
 
 class TestFS(TestArgparse):
     
@@ -502,6 +441,37 @@ class TestFS(TestArgparse):
     
     def test_fs_new(self):
         self.assert_valid_command(['fs', 'new', 'default', 'metadata', 'data'])
+
+    def test_fs_set_max_mds(self):
+        self.assert_valid_command(['fs', 'set', 'default', 'max_mds', '1'])
+        self.assert_valid_command(['fs', 'set', 'default', 'max_mds', '2'])
+
+    def test_fs_set_cluster_down(self):
+        self.assert_valid_command(['fs', 'set', 'default', 'down', 'true'])
+
+    def test_fs_set_cluster_up(self):
+        self.assert_valid_command(['fs', 'set', 'default', 'down', 'false'])
+
+    def test_fs_set_cluster_joinable(self):
+        self.assert_valid_command(['fs', 'set', 'default', 'joinable', 'true'])
+
+    def test_fs_set_cluster_not_joinable(self):
+        self.assert_valid_command(['fs', 'set', 'default', 'joinable', 'false'])
+
+    def test_fs_set(self):
+        self.assert_valid_command(['fs', 'set', 'default', 'max_file_size', '2'])
+        self.assert_valid_command(['fs', 'set', 'default', 'allow_new_snaps', 'no'])
+        assert_equal({}, validate_command(sigdict, ['fs',
+                                                    'set',
+                                                    'invalid']))
+
+    def test_fs_add_data_pool(self):
+        self.assert_valid_command(['fs', 'add_data_pool', 'default', '1'])
+        self.assert_valid_command(['fs', 'add_data_pool', 'default', 'foo'])
+
+    def test_fs_remove_data_pool(self):
+        self.assert_valid_command(['fs', 'rm_data_pool', 'default', '1'])
+        self.assert_valid_command(['fs', 'rm_data_pool', 'default', 'foo'])
 
     def test_fs_rm(self):
         self.assert_valid_command(['fs', 'rm', 'default'])
@@ -516,6 +486,7 @@ class TestFS(TestArgparse):
         self.assert_valid_command(['fs', 'set-default', 'cephfs'])
         assert_equal({}, validate_command(sigdict, ['fs', 'set-default']))
         assert_equal({}, validate_command(sigdict, ['fs', 'set-default', 'cephfs', 'toomany']))
+
 
 class TestMon(TestArgparse):
 
@@ -598,10 +569,8 @@ class TestOSD(TestArgparse):
 
     def test_lspools(self):
         self.assert_valid_command(['osd', 'lspools'])
-        self.assert_valid_command(['osd', 'lspools', '1'])
-        self.assert_valid_command(['osd', 'lspools', '-1'])
         assert_equal({}, validate_command(sigdict, ['osd', 'lspools',
-                                                    '1', 'toomany']))
+                                                    'toomany']))
 
     def test_blacklist_ls(self):
         self.assert_valid_command(['osd', 'blacklist', 'ls'])
@@ -639,13 +608,11 @@ class TestOSD(TestArgparse):
     def test_crush_add_bucket(self):
         self.assert_valid_command(['osd', 'crush', 'add-bucket',
                                    'name', 'type'])
+        self.assert_valid_command(['osd', 'crush', 'add-bucket',
+                                   'name', 'type', 'root=foo-root', 'host=foo-host'])
         assert_equal({}, validate_command(sigdict, ['osd', 'crush']))
         assert_equal({}, validate_command(sigdict, ['osd', 'crush',
                                                     'add-bucket']))
-        assert_equal({}, validate_command(sigdict, ['osd', 'crush',
-                                                    'add-bucket', 'name',
-                                                    'type',
-                                                    'toomany']))
         assert_equal({}, validate_command(sigdict, ['osd', 'crush',
                                                     'add-bucket', '^^^',
                                                     'type']))
@@ -897,9 +864,6 @@ class TestOSD(TestArgparse):
             assert_equal({}, validate_command(sigdict, ['osd', action,
                                                         'pause', 'toomany']))
 
-    def test_cluster_snap(self):
-        assert_equal({}, validate_command(sigdict, ['osd', 'cluster_snap']))
-
     def test_down(self):
         self.check_1_or_more_string_args('osd', 'down')
 
@@ -996,6 +960,106 @@ class TestOSD(TestArgparse):
                                                     'poolname', 'snapname',
                                                     'toomany']))
 
+    def test_pool_kwargs(self):
+        """
+        Use the pool creation command to exercise keyword-style arguments
+        since it has lots of parameters
+        """
+        # Simply use a keyword arg instead of a positional arg, in its
+        # normal order (pgp_num after pg_num)
+        assert_equal(
+            {
+                "prefix": "osd pool create",
+                "pool": "foo",
+                "pg_num": 8,
+                "pgp_num": 16
+            }, validate_command(sigdict, [
+                'osd', 'pool', 'create', "foo", "8", "--pgp_num", "16"]))
+
+        # Again, but using the "--foo=bar" style
+        assert_equal(
+            {
+                "prefix": "osd pool create",
+                "pool": "foo",
+                "pg_num": 8,
+                "pgp_num": 16
+            }, validate_command(sigdict, [
+                'osd', 'pool', 'create', "foo", "8", "--pgp_num=16"]))
+
+        # Specify keyword args in a different order than their definitions
+        # (pgp_num after pool_type)
+        assert_equal(
+            {
+                "prefix": "osd pool create",
+                "pool": "foo",
+                "pg_num": 8,
+                "pgp_num": 16,
+                "pool_type": "replicated"
+            }, validate_command(sigdict, [
+                'osd', 'pool', 'create', "foo", "8",
+                "--pool_type", "replicated",
+                "--pgp_num", "16"]))
+
+        # Use a keyword argument that doesn't exist, should fail validation
+        assert_equal({}, validate_command(sigdict,
+            ['osd', 'pool', 'create', "foo", "8", "--foo=bar"]))
+
+    def test_foo(self):
+        # Long form of a boolean argument (--foo=true)
+        assert_equal(
+            {
+                "prefix": "osd pool delete",
+                "pool": "foo",
+                "pool2": "foo",
+                "yes_i_really_really_mean_it": True
+            }, validate_command(sigdict, [
+                'osd', 'pool', 'delete', "foo", "foo",
+                "--yes-i-really-really-mean-it=true"]))
+
+    def test_pool_bool_args(self):
+        """
+        Use pool deletion to exercise boolean arguments since it has
+        the --yes-i-really-really-mean-it flags
+        """
+
+        # Short form of a boolean argument (--foo)
+        assert_equal(
+            {
+                "prefix": "osd pool delete",
+                "pool": "foo",
+                "pool2": "foo",
+                "yes_i_really_really_mean_it": True
+            }, validate_command(sigdict, [
+                'osd', 'pool', 'delete', "foo", "foo",
+                "--yes-i-really-really-mean-it"]))
+
+        # Long form of a boolean argument (--foo=true)
+        assert_equal(
+            {
+                "prefix": "osd pool delete",
+                "pool": "foo",
+                "pool2": "foo",
+                "yes_i_really_really_mean_it": True
+            }, validate_command(sigdict, [
+                'osd', 'pool', 'delete', "foo", "foo",
+                "--yes-i-really-really-mean-it=true"]))
+
+        # Negative form of a boolean argument (--foo=false)
+        assert_equal(
+            {
+                "prefix": "osd pool delete",
+                "pool": "foo",
+                "pool2": "foo",
+                "yes_i_really_really_mean_it": False
+            }, validate_command(sigdict, [
+                'osd', 'pool', 'delete', "foo", "foo",
+                "--yes-i-really-really-mean-it=false"]))
+
+        # Invalid value boolean argument (--foo=somethingelse)
+        assert_equal({}, validate_command(sigdict, [
+                'osd', 'pool', 'delete', "foo", "foo",
+                "--yes-i-really-really-mean-it=rhubarb"]))
+
     def test_pool_create(self):
         self.assert_valid_command(['osd', 'pool', 'create',
                                    'poolname', '128'])
@@ -1055,8 +1119,8 @@ class TestOSD(TestArgparse):
                                                     'toomany']))
 
     def test_pool_get(self):
-        for var in ('size', 'min_size', 'crash_replay_interval',
-                    'pg_num', 'pgp_num', 'crush_rule', 'auid', 'fast_read',
+        for var in ('size', 'min_size',
+                    'pg_num', 'pgp_num', 'crush_rule', 'fast_read',
                     'scrub_min_interval', 'scrub_max_interval',
                     'deep_scrub_interval', 'recovery_priority',
                     'recovery_op_priority'):
@@ -1074,9 +1138,9 @@ class TestOSD(TestArgparse):
                                                     'invalid']))
 
     def test_pool_set(self):
-        for var in ('size', 'min_size', 'crash_replay_interval',
+        for var in ('size', 'min_size',
                     'pg_num', 'pgp_num', 'crush_rule',
-                    'hashpspool', 'auid', 'fast_read',
+                    'hashpspool', 'fast_read',
                     'scrub_min_interval', 'scrub_max_interval',
                     'deep_scrub_interval', 'recovery_priority',
                     'recovery_op_priority'):
@@ -1120,7 +1184,6 @@ class TestOSD(TestArgparse):
         self.assert_valid_command(['osd', 'reweight-by-utilization'])
         self.assert_valid_command(['osd', 'reweight-by-utilization', '100'])
         self.assert_valid_command(['osd', 'reweight-by-utilization', '100', '.1'])
-        self.assert_valid_command(['osd', 'reweight-by-utilization', '--no-increasing'])
         assert_equal({}, validate_command(sigdict, ['osd',
                                                     'reweight-by-utilization',
                                                     '100',
@@ -1199,10 +1262,80 @@ class TestConfigKey(TestArgparse):
         self.check_1_string_arg('config-key', 'exists')
 
     def test_dump(self):
-        self.check_no_arg('config-key', 'dump')
+        self.check_0_or_1_string_arg('config-key', 'dump')
 
     def test_list(self):
         self.check_no_arg('config-key', 'list')
+
+
+class TestValidate(TestCase):
+
+    ARGS = 0
+    KWARGS = 1
+    KWARGS_EQ = 2
+    MIXED = 3
+
+    def setUp(self):
+        self.prefix = ['some', 'random', 'cmd']
+        self.args_dict = [
+            {'name': 'variable_one', 'type': 'CephString'},
+            {'name': 'variable_two', 'type': 'CephString'},
+            {'name': 'variable_three', 'type': 'CephString'},
+            {'name': 'variable_four', 'type': 'CephInt'},
+            {'name': 'variable_five', 'type': 'CephString'}]
+        self.args = []
+        for d in self.args_dict:
+            if d['type'] == 'CephInt':
+                val = "{}".format(random.randint(0, 100))
+            elif d['type'] == 'CephString':
+                letters = string.ascii_letters
+                str_len = random.randint(5, 10)
+                val = ''.join(random.choice(letters) for _ in range(str_len))
+            else:
+                self.skipTest()
+
+            self.args.append((d['name'], val))
+
+        self.sig = parse_funcsig(self.prefix + self.args_dict)
+
+    @nottest
+    def arg_kwarg_test(self, prefix, args, sig, arg_type=0):
+        """
+        Runs validate in different arg/kargs ways.
+
+        :param prefix: List of prefix commands (that can't be kwarged)
+        :param args: a list of kwarg, arg pairs: [(k1, v1), (k2, v2), ...]
+        :param sig: The sig to match
+        :param arg_type: how to build the args to send. As positional args (ARGS),
+                     as long kwargs (KWARGS [--k v]), other style long kwargs
+                     (KWARGS_EQ (--k=v]), and mixed (MIXED) where there will be
+                     a random mix of the above.
+        :return: None, the method will assert.
+        """
+        final_args = list(prefix)
+        for k, v in args:
+            a_type = arg_type
+            if a_type == self.MIXED:
+                a_type = random.choice((self.ARGS,
+                                          self.KWARGS,
+                                          self.KWARGS_EQ))
+            if a_type == self.ARGS:
+                final_args.append(v)
+            elif a_type == self.KWARGS:
+                final_args.extend(["--{}".format(k), v])
+            else:
+                final_args.append("--{}={}".format(k, v))
+
+        try:
+            validate(final_args, sig)
+        except (ArgumentError, ArgumentMissing,
+                ArgumentNumber, ArgumentTooFew, ArgumentValid) as ex:
+            self.fail("Validation failed: {}".format(str(ex)))
+
+    def test_args_and_kwargs_validate(self):
+        for arg_type in (self.ARGS, self.KWARGS, self.KWARGS_EQ, self.MIXED):
+            self.arg_kwarg_test(self.prefix, self.args, self.sig, arg_type)
+
 # Local Variables:
 # compile-command: "cd ../.. ; make -j4 &&
 #  PYTHONPATH=pybind nosetests --stop \

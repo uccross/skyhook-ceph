@@ -71,7 +71,7 @@ int FileJournal::_open(bool forwrite, bool create)
 	   << cpp_strerror(err) << dendl;
     }
   }
-  fd = TEMP_FAILURE_RETRY(::open(fn.c_str(), flags, 0644));
+  fd = TEMP_FAILURE_RETRY(::open(fn.c_str(), flags|O_CLOEXEC, 0644));
   if (fd < 0) {
     int err = errno;
     dout(2) << "FileJournal::_open unable to open journal "
@@ -146,7 +146,8 @@ int FileJournal::_open(bool forwrite, bool create)
 int FileJournal::_open_block_device()
 {
   int64_t bdev_sz = 0;
-  int ret = get_block_device_size(fd, &bdev_sz);
+  BlkDev blkdev(fd);
+  int ret = blkdev.get_size(&bdev_sz);
   if (ret) {
     dout(0) << __func__ << ": failed to read block device size." << dendl;
     return -EIO;
@@ -167,7 +168,7 @@ int FileJournal::_open_block_device()
   block_size = cct->_conf->journal_block_size;
 
   if (cct->_conf->journal_discard) {
-    discard = block_device_support_discard(fn.c_str());
+    discard = blkdev.support_discard();
     dout(10) << fn << " support discard: " << (int)discard << dendl;
   }
 
@@ -250,7 +251,7 @@ int FileJournal::check()
 {
   int ret;
 
-  assert(fd == -1);
+  ceph_assert(fd == -1);
   ret = _open(false, false);
   if (ret)
     return ret;
@@ -332,7 +333,7 @@ int FileJournal::create()
     goto free_buf;
   }
 
-  needed_space = ((int64_t)cct->_conf->osd_max_write_size) << 20;
+  needed_space = cct->_conf->osd_max_write_size << 20;
   needed_space += (2 * sizeof(entry_header_t)) + get_top();
   if (header.max_size - header.start < needed_space) {
     derr << "FileJournal::create: OSD journal is not large enough to hold "
@@ -361,7 +362,7 @@ done:
 // This can not be used on an active journal
 int FileJournal::peek_fsid(uuid_d& fsid)
 {
-  assert(fd == -1);
+  ceph_assert(fd == -1);
   int r = _open(false, false);
   if (r)
     return r;
@@ -490,9 +491,9 @@ void FileJournal::close()
   stop_writer();
 
   // close
-  assert(writeq_empty());
-  assert(!must_write_header);
-  assert(fd >= 0);
+  ceph_assert(writeq_empty());
+  ceph_assert(!must_write_header);
+  ceph_assert(fd >= 0);
   _close(fd);
   fd = -1;
 }
@@ -520,7 +521,7 @@ int FileJournal::_fdump(Formatter &f, bool simple)
 {
   dout(10) << "_fdump" << dendl;
 
-  assert(fd == -1);
+  ceph_assert(fd == -1);
   int err = _open(false, false);
   if (err)
     return err;
@@ -586,7 +587,7 @@ int FileJournal::_fdump(Formatter &f, bool simple)
       f.dump_unsigned("bl.length", bl.length());
     } else {
       f.open_array_section("transactions");
-      bufferlist::iterator p = bl.begin();
+      auto p = bl.cbegin();
       int trans_num = 0;
       while (!p.end()) {
         ObjectStore::Transaction t(p);
@@ -672,7 +673,7 @@ int FileJournal::read_header(header_t *hdr) const
   dout(10) << "read_header" << dendl;
   bufferlist bl;
 
-  buffer::ptr bp = buffer::create_page_aligned(block_size);
+  buffer::ptr bp = buffer::create_small_page_aligned(block_size);
   char* bpdata = bp.c_str();
   int r = ::pread(fd, bpdata, bp.length(), 0);
 
@@ -693,8 +694,8 @@ int FileJournal::read_header(header_t *hdr) const
   bl.push_back(std::move(bp));
 
   try {
-    bufferlist::iterator p = bl.begin();
-    ::decode(*hdr, p);
+    auto p = bl.cbegin();
+    decode(*hdr, p);
   }
   catch (buffer::error& e) {
     derr << "read_header error decoding journal header" << dendl;
@@ -726,8 +727,8 @@ bufferptr FileJournal::prepare_header()
     Mutex::Locker l(finisher_lock);
     header.committed_up_to = journaled_seq;
   }
-  ::encode(header, bl);
-  bufferptr bp = buffer::create_page_aligned(get_top());
+  encode(header, bl);
+  bufferptr bp = buffer::create_small_page_aligned(get_top());
   // don't use bp.zero() here, because it also invalidates
   // crc cache (which is not yet populated anyway)
   char* data = bp.c_str();
@@ -812,9 +813,9 @@ int FileJournal::prepare_multi_write(bufferlist& bl, uint64_t& orig_ops, uint64_
 #ifdef HAVE_LIBAIO
 	{
 	  Mutex::Locker locker(aio_lock);
-	  assert(aio_write_queue_ops > 0);
+	  ceph_assert(aio_write_queue_ops > 0);
 	  aio_write_queue_ops--;
-	  assert(aio_write_queue_bytes >= bytes);
+	  ceph_assert(aio_write_queue_bytes >= bytes);
 	  aio_write_queue_bytes -= bytes;
 	}
 #else
@@ -867,7 +868,7 @@ int FileJournal::prepare_multi_write(bufferlist& bl, uint64_t& orig_ops, uint64_
 
 out:
   dout(20) << "prepare_multi_write queue_pos now " << queue_pos << dendl;
-  assert((write_pos + bl.length() == queue_pos) ||
+  ceph_assert((write_pos + bl.length() == queue_pos) ||
          (write_pos + bl.length() - header.max_size + get_top() == queue_pos));
   return 0;
 }
@@ -893,7 +894,7 @@ void FileJournal::queue_write_fin(uint64_t seq, Context *fin)
 
 void FileJournal::queue_completions_thru(uint64_t seq)
 {
-  assert(finisher_lock.is_locked());
+  ceph_assert(finisher_lock.is_locked());
   utime_t now = ceph_clock_now();
   list<completion_item> items;
   batch_pop_completions(items);
@@ -981,9 +982,9 @@ void FileJournal::check_align(off64_t pos, bufferlist& bl)
 {
   // make sure list segments are page aligned
   if (directio && !bl.is_aligned_size_and_memory(block_size, CEPH_DIRECTIO_ALIGNMENT)) {
-    assert((bl.length() & (CEPH_DIRECTIO_ALIGNMENT - 1)) == 0);
-    assert((pos & (CEPH_DIRECTIO_ALIGNMENT - 1)) == 0);
-    assert(0 == "bl was not aligned");
+    ceph_assert((bl.length() & (CEPH_DIRECTIO_ALIGNMENT - 1)) == 0);
+    ceph_assert((pos & (CEPH_DIRECTIO_ALIGNMENT - 1)) == 0);
+    ceph_abort_msg("bl was not aligned");
   }
 }
 
@@ -1049,7 +1050,7 @@ void FileJournal::do_write(bufferlist& bl)
     split = header.max_size - pos;
     first.substr_of(bl, 0, split);
     second.substr_of(bl, split, bl.length() - split);
-    assert(first.length() + second.length() == bl.length());
+    ceph_assert(first.length() + second.length() == bl.length());
     dout(10) << "do_write wrapping, first bit at " << pos << " len " << first.length()
 	     << " second bit len " << second.length() << " (orig len " << bl.length() << ")" << dendl;
 
@@ -1060,7 +1061,10 @@ void FileJournal::do_write(bufferlist& bl)
     // header too?
     if (hbp.length()) {
       // be sneaky: include the header in the second fragment
-      second.push_front(hbp);
+      bufferlist tmp;
+      tmp.push_back(hbp);
+      tmp.claim_append(second);
+      second.swap(tmp);
       pos = 0;          // we included the header
     }
     // Write the second portion first possible with the header, so
@@ -1080,7 +1084,7 @@ void FileJournal::do_write(bufferlist& bl)
       check_align(first_pos, first);
       ceph_abort();
     }
-    assert(first_pos == get_top());
+    ceph_assert(first_pos == get_top());
   } else {
     // header too?
     if (hbp.length()) {
@@ -1120,7 +1124,7 @@ void FileJournal::do_write(bufferlist& bl)
      * flush disk caches or commits any sort of metadata.
      */
     int ret = 0;
-#if defined(DARWIN) || defined(__FreeBSD__)
+#if defined(__APPLE__) || defined(__FreeBSD__)
     ret = ::fsync(fd);
 #else
     ret = ::fdatasync(fd);
@@ -1140,8 +1144,8 @@ void FileJournal::do_write(bufferlist& bl)
 
   write_lock.Lock();
 
-  assert(write_pos == pos);
-  assert(write_pos % header.alignment == 0);
+  ceph_assert(write_pos == pos);
+  ceph_assert(write_pos % header.alignment == 0);
 
   {
     Mutex::Locker locker(finisher_lock);
@@ -1209,7 +1213,7 @@ void FileJournal::write_thread_entry()
       // flight if we hit this limit to ensure we keep the device
       // saturated.
       while (aio_num > 0) {
-	int exp = MIN(aio_num * 2, 24);
+	int exp = std::min<int>(aio_num * 2, 24);
 	long unsigned min_new = 1ull << exp;
 	uint64_t cur = aio_write_queue_bytes;
 	dout(20) << "write_thread_entry aio throttle: aio num " << aio_num << " bytes " << aio_bytes
@@ -1250,7 +1254,7 @@ void FileJournal::write_thread_entry()
 	continue;
       }
     }
-    assert(r == 0);
+    ceph_assert(r == 0);
 
     if (logger) {
       logger->inc(l_filestore_journal_wr);
@@ -1305,7 +1309,7 @@ void FileJournal::do_aio_write(bufferlist& bl)
     split = header.max_size - pos;
     first.substr_of(bl, 0, split);
     second.substr_of(bl, split, bl.length() - split);
-    assert(first.length() + second.length() == bl.length());
+    ceph_assert(first.length() + second.length() == bl.length());
     dout(10) << "do_aio_write wrapping, first bit at " << pos << "~" << first.length() << dendl;
 
     if (write_aio_bl(pos, first, 0)) {
@@ -1313,10 +1317,13 @@ void FileJournal::do_aio_write(bufferlist& bl)
 	   << ") failed" << dendl;
       ceph_abort();
     }
-    assert(pos == header.max_size);
+    ceph_assert(pos == header.max_size);
     if (hbp.length()) {
       // be sneaky: include the header in the second fragment
-      second.push_front(hbp);
+      bufferlist tmp;
+      tmp.push_back(hbp);
+      tmp.claim_append(second);
+      second.swap(tmp);
       pos = 0;          // we included the header
     } else
       pos = get_top();  // no header, start after that
@@ -1347,7 +1354,7 @@ void FileJournal::do_aio_write(bufferlist& bl)
   write_pos = pos;
   if (write_pos == header.max_size)
     write_pos = get_top();
-  assert(write_pos % header.alignment == 0);
+  ceph_assert(write_pos % header.alignment == 0);
 }
 
 /**
@@ -1361,15 +1368,13 @@ int FileJournal::write_aio_bl(off64_t& pos, bufferlist& bl, uint64_t seq)
   dout(20) << "write_aio_bl " << pos << "~" << bl.length() << " seq " << seq << dendl;
 
   while (bl.length() > 0) {
-    int max = MIN(bl.get_num_buffers(), IOV_MAX-1);
+    int max = std::min<int>(bl.get_num_buffers(), IOV_MAX-1);
     iovec *iov = new iovec[max];
     int n = 0;
     unsigned len = 0;
-    for (std::list<buffer::ptr>::const_iterator p = bl.buffers().begin();
-	 n < max;
-	 ++p, ++n) {
-      assert(p != bl.buffers().end());
-      iov[n].iov_base = (void *)p->c_str();
+    for (auto p = std::cbegin(bl.buffers()); n < max; ++p, ++n) {
+      ceph_assert(p != std::cend(bl.buffers()));
+      iov[n].iov_base = const_cast<void*>(static_cast<const void*>(p->c_str()));
       iov[n].iov_len = p->length();
       len += p->length();
     }
@@ -1415,7 +1420,7 @@ int FileJournal::write_aio_bl(off64_t& pos, bufferlist& bl, uint64_t seq)
 	  continue;
 	}
 	check_align(pos, tbl);
-	assert(0 == "io_submit got unexpected error");
+	ceph_abort_msg("io_submit got unexpected error");
       } else {
 	break;
       }
@@ -1454,7 +1459,10 @@ void FileJournal::write_finish_thread_entry()
 	continue;
       }
       derr << "io_getevents got " << cpp_strerror(r) << dendl;
-      assert(0 == "got unexpected error from io_getevents");
+      if (r == -EIO) {
+	note_io_error_event(devname.c_str(), fn.c_str(), -EIO, 0, 0, 0);
+      }
+      ceph_abort_msg("got unexpected error from io_getevents");
     }
 
     {
@@ -1464,7 +1472,7 @@ void FileJournal::write_finish_thread_entry()
 	if (event[i].res != ai->len) {
 	  derr << "aio to " << ai->off << "~" << ai->len
 	       << " returned: " << (int)event[i].res << dendl;
-	  assert(0 == "unexpected aio error");
+	  ceph_abort_msg("unexpected aio error");
 	}
 	dout(10) << __func__ << " aio " << ai->off
 		 << "~" << ai->len << " done" << dendl;
@@ -1483,7 +1491,7 @@ void FileJournal::write_finish_thread_entry()
  */
 void FileJournal::check_aio_completion()
 {
-  assert(aio_lock.is_locked());
+  ceph_assert(aio_lock.is_locked());
   dout(20) << "check_aio_completion" << dendl;
 
   bool completed_something = false, signal = false;
@@ -1539,7 +1547,7 @@ int FileJournal::prepare_entry(vector<ObjectStore::Transaction>& tls, bufferlist
      data_len = (*p).get_data_length();
      data_align = ((*p).get_data_alignment() - bl.length()) & ~CEPH_PAGE_MASK;
     }
-    ::encode(*p, bl);
+    encode(*p, bl);
   }
   if (tbl->length()) {
     bl.claim_append(*tbl);
@@ -1551,7 +1559,7 @@ int FileJournal::prepare_entry(vector<ObjectStore::Transaction>& tls, bufferlist
   memset(&h, 0, sizeof(h));
   if (data_align >= 0)
     h.pre_pad = ((unsigned int)data_align - (unsigned int)head_size) & ~CEPH_PAGE_MASK;
-  off64_t size = ROUND_UP_TO(base_size + h.pre_pad, header.alignment);
+  off64_t size = round_up_to(base_size + h.pre_pad, header.alignment);
   unsigned post_pad = size - base_size - h.pre_pad;
   h.len = bl.length();
   h.post_pad = post_pad;
@@ -1587,11 +1595,9 @@ void FileJournal::submit_entry(uint64_t seq, bufferlist& e, uint32_t orig_len,
   dout(5) << "submit_entry seq " << seq
 	  << " len " << e.length()
 	  << " (" << oncommit << ")" << dendl;
-  assert(e.length() > 0);
-  assert(e.length() < header.max_size);
+  ceph_assert(e.length() > 0);
+  ceph_assert(e.length() < header.max_size);
 
-  if (osd_op)
-    osd_op->mark_event("commit_queued_for_journal_write");
   if (logger) {
     logger->inc(l_filestore_journal_queue_bytes, orig_len);
     logger->inc(l_filestore_journal_queue_ops, 1);
@@ -1643,14 +1649,14 @@ bool FileJournal::writeq_empty()
 
 FileJournal::write_item &FileJournal::peek_write()
 {
-  assert(write_lock.is_locked());
+  ceph_assert(write_lock.is_locked());
   Mutex::Locker locker(writeq_lock);
   return writeq.front();
 }
 
 void FileJournal::pop_write()
 {
-  assert(write_lock.is_locked());
+  ceph_assert(write_lock.is_locked());
   Mutex::Locker locker(writeq_lock);
   if (logger) {
     logger->dec(l_filestore_journal_queue_bytes, writeq.front().orig_len);
@@ -1661,7 +1667,7 @@ void FileJournal::pop_write()
 
 void FileJournal::batch_pop_write(list<write_item> &items)
 {
-  assert(write_lock.is_locked());
+  ceph_assert(write_lock.is_locked());
   {
     Mutex::Locker locker(writeq_lock);
     writeq.swap(items);
@@ -1676,7 +1682,7 @@ void FileJournal::batch_pop_write(list<write_item> &items)
 
 void FileJournal::batch_unpop_write(list<write_item> &items)
 {
-  assert(write_lock.is_locked());
+  ceph_assert(write_lock.is_locked());
   for (auto &&i : items) {
     if (logger) {
       logger->inc(l_filestore_journal_queue_bytes, i.orig_len);
@@ -1724,16 +1730,19 @@ void FileJournal::commit_start(uint64_t seq)
  */
 void FileJournal::do_discard(int64_t offset, int64_t end)
 {
-  dout(10) << __func__ << "trim(" << offset << ", " << end << dendl;
+  dout(10) << __func__ << " trim(" << offset << ", " << end << dendl;
 
-  offset = ROUND_UP_TO(offset, block_size);
+  offset = round_up_to(offset, block_size);
   if (offset >= end)
     return;
-  end = ROUND_UP_TO(end - block_size, block_size);
-  assert(end >= offset);
-  if (offset < end)
-    if (block_device_discard(fd, offset, end - offset) < 0)
+  end = round_up_to(end - block_size, block_size);
+  ceph_assert(end >= offset);
+  if (offset < end) {
+    BlkDev blkdev(fd);
+    if (blkdev.discard(offset, end - offset) < 0) {
 	dout(1) << __func__ << "ioctl(BLKDISCARD) error:" << cpp_strerror(errno) << dendl;
+    }
+  }
 }
 
 void FileJournal::committed_thru(uint64_t seq)
@@ -1748,7 +1757,7 @@ void FileJournal::committed_thru(uint64_t seq)
 
   if (seq < last_committed_seq) {
     dout(5) << "committed_thru " << seq << " < last_committed_seq " << last_committed_seq << dendl;
-    assert(seq >= last_committed_seq);
+    ceph_assert(seq >= last_committed_seq);
     return;
   }
   if (seq == last_committed_seq) {
@@ -1891,13 +1900,13 @@ void FileJournal::wrap_read_bl(
       len = olen;                         // rest
 
     int64_t actual = ::lseek64(fd, pos, SEEK_SET);
-    assert(actual == pos);
+    ceph_assert(actual == pos);
 
     bufferptr bp = buffer::create(len);
     int r = safe_read_exact(fd, bp.c_str(), len);
     if (r) {
       derr << "FileJournal::wrap_read_bl: safe_read_exact " << pos << "~" << len << " returned "
-	   << r << dendl;
+	   << cpp_strerror(r) << dendl;
       ceph_abort();
     }
     bl->push_back(std::move(bp));
@@ -2059,7 +2068,7 @@ FileJournal::read_entry_result FileJournal::do_read_entry(
   if (_h)
     *_h = *h;
 
-  assert(cur_pos % header.alignment == 0);
+  ceph_assert(cur_pos % header.alignment == 0);
   return SUCCESS;
 }
 
@@ -2108,18 +2117,18 @@ void FileJournal::corrupt(
     corrupt_at = corrupt_at + get_top() - header.max_size;
 
   int64_t actual = ::lseek64(fd, corrupt_at, SEEK_SET);
-  assert(actual == corrupt_at);
+  ceph_assert(actual == corrupt_at);
 
   char buf[10];
   int r = safe_read_exact(fd, buf, 1);
-  assert(r == 0);
+  ceph_assert(r == 0);
 
   actual = ::lseek64(wfd, corrupt_at, SEEK_SET);
-  assert(actual == corrupt_at);
+  ceph_assert(actual == corrupt_at);
 
   buf[0]++;
   r = safe_write(wfd, buf, 1);
-  assert(r == 0);
+  ceph_assert(r == 0);
 }
 
 void FileJournal::corrupt_payload(
@@ -2176,4 +2185,32 @@ off64_t FileJournal::get_journal_size_estimate()
   }
   dout(20) << __func__ << " journal size=" << size << dendl;
   return size;
+}
+
+void FileJournal::get_devices(set<string> *ls)
+{
+  string dev_node;
+  BlkDev blkdev(fd);
+  if (int rc = blkdev.wholedisk(&dev_node); rc) {
+    return;
+  }
+  get_raw_devices(dev_node, ls);
+}
+
+void FileJournal::collect_metadata(map<string,string> *pm)
+{
+  BlkDev blkdev(fd);
+  char partition_path[PATH_MAX];
+  char dev_node[PATH_MAX];
+  if (blkdev.partition(partition_path, PATH_MAX)) {
+    (*pm)["backend_filestore_journal_partition_path"] = "unknown";
+  } else {
+    (*pm)["backend_filestore_journal_partition_path"] = string(partition_path);
+  }
+  if (blkdev.wholedisk(dev_node, PATH_MAX)) {
+    (*pm)["backend_filestore_journal_dev_node"] = "unknown";
+  } else {
+    (*pm)["backend_filestore_journal_dev_node"] = string(dev_node);
+    devname = dev_node;
+  }
 }

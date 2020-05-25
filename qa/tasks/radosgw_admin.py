@@ -16,7 +16,6 @@ import logging
 import time
 import datetime
 import Queue
-import bunch
 
 import sys
 
@@ -207,7 +206,7 @@ class requestlog_queue():
 	    pass
 	elif response.status < 200 or response.status >= 400:
 	    error = True
-        self.q.put(bunch.Bunch({'t': now, 'o': request, 'i': response, 'e': error}))
+        self.q.put({'t': now, 'o': request, 'i': response, 'e': error})
     def clear(self):
         with self.q.mutex:
             self.q.queue.clear()
@@ -215,16 +214,16 @@ class requestlog_queue():
         while not self.q.empty():
             j = self.q.get()
 	    bytes_out = 0
-            if 'Content-Length' in j.o.headers:
-		bytes_out = int(j.o.headers['Content-Length'])
+            if 'Content-Length' in j['o'].headers:
+		bytes_out = int(j['o'].headers['Content-Length'])
             bytes_in = 0
-            if 'content-length' in j.i.msg.dict:
-		bytes_in = int(j.i.msg.dict['content-length'])
+            if 'content-length' in j['i'].msg.dict:
+		bytes_in = int(j['i'].msg.dict['content-length'])
             log.info('RL: %s %s %s bytes_out=%d bytes_in=%d failed=%r'
-		% (cat, bucket, user, bytes_out, bytes_in, j.e))
+		% (cat, bucket, user, bytes_out, bytes_in, j['e']))
 	    if add_entry == None:
 		add_entry = self.adder
-	    add_entry(cat, bucket, user, bytes_out, bytes_in, j.e)
+	    add_entry(cat, bucket, user, bytes_out, bytes_in, j['e'])
 
 def create_presigned_url(conn, method, bucket_name, key_name, expiration):
     return conn.generate_url(expires_in=expiration,
@@ -279,7 +278,7 @@ def task(ctx, config):
 
     # once the client is chosen, pull the host name and  assigned port out of
     # the role_endpoints that were assigned by the rgw task
-    (remote_host, remote_port) = ctx.rgw.role_endpoints[client]
+    endpoint = ctx.rgw.role_endpoints[client]
 
     ##
     user1='foo'
@@ -305,16 +304,16 @@ def task(ctx, config):
         aws_access_key_id=access_key,
         aws_secret_access_key=secret_key,
         is_secure=False,
-        port=remote_port,
-        host=remote_host,
+        port=endpoint.port,
+        host=endpoint.hostname,
         calling_format=boto.s3.connection.OrdinaryCallingFormat(),
         )
     connection2 = boto.s3.connection.S3Connection(
         aws_access_key_id=access_key2,
         aws_secret_access_key=secret_key2,
         is_secure=False,
-        port=remote_port,
-        host=remote_host,
+        port=endpoint.port,
+        host=endpoint.hostname,
         calling_format=boto.s3.connection.OrdinaryCallingFormat(),
         )
 

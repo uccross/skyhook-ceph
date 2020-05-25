@@ -1,3 +1,5 @@
+.. _multisite:
+
 ==========
 Multi-Site
 ==========
@@ -61,10 +63,13 @@ A multi-site configuration requires at least two Ceph storage clusters,
 preferably given a distinct cluster name. At least two Ceph object
 gateway instances, one for each Ceph storage cluster.
 
-This guide assumes at least two Ceph storage clusters in geographically
+This guide assumes at least two Ceph storage clusters are in geographically
 separate locations; however, the configuration can work on the same
 site. This guide also assumes two Ceph object gateway servers named
 ``rgw1`` and ``rgw2``.
+
+.. important:: Running a single Ceph storage cluster is NOT recommended unless you have 
+               low latency WAN connections.
 
 A multi-site configuration requires a master zone group and a master
 zone. Additionally, each zone group requires a master zone. Zone groups
@@ -224,7 +229,7 @@ the default zone group first.
 
     # radosgw-admin zonegroup remove --rgw-zonegroup=default --rgw-zone=default
     # radosgw-admin period update --commit
-    # radosgw-admin zone delete --rgw-zone=default
+    # radosgw-admin zone rm --rgw-zone=default
     # radosgw-admin period update --commit
     # radosgw-admin zonegroup delete --rgw-zonegroup=default
     # radosgw-admin period update --commit
@@ -239,11 +244,11 @@ they exist.
 
 ::
 
-    # rados rmpool default.rgw.control default.rgw.control --yes-i-really-really-mean-it
-    # rados rmpool default.rgw.data.root default.rgw.data.root --yes-i-really-really-mean-it
-    # rados rmpool default.rgw.gc default.rgw.gc --yes-i-really-really-mean-it
-    # rados rmpool default.rgw.log default.rgw.log --yes-i-really-really-mean-it
-    # rados rmpool default.rgw.users.uid default.rgw.users.uid --yes-i-really-really-mean-it
+    # ceph osd pool rm default.rgw.control default.rgw.control --yes-i-really-really-mean-it
+    # ceph osd pool rm default.rgw.data.root default.rgw.data.root --yes-i-really-really-mean-it
+    # ceph osd pool rm default.rgw.gc default.rgw.gc --yes-i-really-really-mean-it
+    # ceph osd pool rm default.rgw.log default.rgw.log --yes-i-really-really-mean-it
+    # ceph osd pool rm default.rgw.users.uid default.rgw.users.uid --yes-i-really-really-mean-it
 
 Create a System User
 --------------------
@@ -337,13 +342,16 @@ Pull the Realm
 --------------
 
 Using the URL path, access key and secret of the master zone in the
-master zone group, pull the realm to the host. To pull a non-default
-realm, specify the realm using the ``--rgw-realm`` or ``--realm-id``
-configuration options.
+master zone group, pull the realm configuration to the host. To pull a
+non-default realm, specify the realm using the ``--rgw-realm`` or
+``--realm-id`` configuration options.
 
 ::
 
     # radosgw-admin realm pull --url={url-to-master-zone-gateway} --access-key={access-key} --secret={secret}
+
+.. note:: Pulling the realm also retrieves the remote's current period
+          configuration, and makes it the current period on this host as well.
 
 If this realm is the default realm or the only realm, make the realm the
 default realm.
@@ -351,22 +359,6 @@ default realm.
 ::
 
     # radosgw-admin realm default --rgw-realm={realm-name}
-
-Pull the Period
----------------
-
-Using the URL path, access key and secret of the master zone in the
-master zone group, pull the period to the host. To pull a period from a
-non-default realm, specify the realm using the ``--rgw-realm`` or
-``--realm-id`` configuration options.
-
-::
-
-    # radosgw-admin period pull --url={url-to-master-zone-gateway} --access-key={access-key} --secret={secret}
-
-
-.. note:: Pulling the period retrieves the latest version of the zone group
-          and zone configurations for the realm.
 
 Create a Secondary Zone
 -----------------------
@@ -412,18 +404,18 @@ Delete the default zone if needed.
 
 ::
 
-    # radosgw-admin zone delete --rgw-zone=default
+    # radosgw-admin zone rm --rgw-zone=default
 
 Finally, delete the default pools in your Ceph storage cluster if
 needed.
 
 ::
 
-    # rados rmpool default.rgw.control default.rgw.control --yes-i-really-really-mean-it
-    # rados rmpool default.rgw.data.root default.rgw.data.root --yes-i-really-really-mean-it
-    # rados rmpool default.rgw.gc default.rgw.gc --yes-i-really-really-mean-it
-    # rados rmpool default.rgw.log default.rgw.log --yes-i-really-really-mean-it
-    # rados rmpool default.rgw.users.uid default.rgw.users.uid --yes-i-really-really-mean-it
+    # ceph osd pool rm default.rgw.control default.rgw.control --yes-i-really-really-mean-it
+    # ceph osd pool rm default.rgw.data.root default.rgw.data.root --yes-i-really-really-mean-it
+    # ceph osd pool rm default.rgw.gc default.rgw.gc --yes-i-really-really-mean-it
+    # ceph osd pool rm default.rgw.log default.rgw.log --yes-i-really-really-mean-it
+    # ceph osd pool rm default.rgw.users.uid default.rgw.users.uid --yes-i-really-really-mean-it
 
 Update the Ceph Configuration File
 ----------------------------------
@@ -582,7 +574,7 @@ disaster recovery.
    ::
 
        # radosgw-admin zone modify --rgw-zone={zone-name} --master --default \
-                                   --read-only=False
+                                   --read-only=false
 
 2. Update the period to make the changes take effect.
 
@@ -598,13 +590,13 @@ disaster recovery.
 
 If the former master zone recovers, revert the operation.
 
-1. From the recovered zone, pull the period from the current master
-   zone.
+1. From the recovered zone, pull the latest realm configuration
+   from the current master zone.
 
    ::
 
-       # radosgw-admin period pull --url={url-to-master-zone-gateway} \
-                                   --access-key={access-key} --secret={secret}
+       # radosgw-admin realm pull --url={url-to-master-zone-gateway} \
+                                  --access-key={access-key} --secret={secret}
 
 2. Make the recovered zone the master and default zone.
 
@@ -1285,7 +1277,7 @@ Next, delete the zone. Execute the following:
 
 ::
 
-    # radosgw-admin zone delete --rgw-zone<name>
+    # radosgw-admin zone rm --rgw-zone<name>
 
 Finally, update the period:
 
@@ -1310,11 +1302,11 @@ with the deleted zone’s name.
 
 ::
 
-    # rados rmpool <del-zone>.rgw.control <del-zone>.rgw.control --yes-i-really-really-mean-it
-    # rados rmpool <del-zone>.rgw.data.root <del-zone>.rgw.data.root --yes-i-really-really-mean-it
-    # rados rmpool <del-zone>.rgw.gc <del-zone>.rgw.gc --yes-i-really-really-mean-it
-    # rados rmpool <del-zone>.rgw.log <del-zone>.rgw.log --yes-i-really-really-mean-it
-    # rados rmpool <del-zone>.rgw.users.uid <del-zone>.rgw.users.uid --yes-i-really-really-mean-it
+    # ceph osd pool rm <del-zone>.rgw.control <del-zone>.rgw.control --yes-i-really-really-mean-it
+    # ceph osd pool rm <del-zone>.rgw.data.root <del-zone>.rgw.data.root --yes-i-really-really-mean-it
+    # ceph osd pool rm <del-zone>.rgw.gc <del-zone>.rgw.gc --yes-i-really-really-mean-it
+    # ceph osd pool rm <del-zone>.rgw.log <del-zone>.rgw.log --yes-i-really-really-mean-it
+    # ceph osd pool rm <del-zone>.rgw.users.uid <del-zone>.rgw.users.uid --yes-i-really-really-mean-it
 
 Modify a Zone
 ~~~~~~~~~~~~~
@@ -1449,10 +1441,6 @@ instance.
 | ``rgw_default_zone_group_info_oid`` | The OID for storing the default   | String  | ``default.zonegroup`` |
 |                                     | zone group. We do not recommend   |         |                       |
 |                                     | changing this setting.            |         |                       |
-+-------------------------------------+-----------------------------------+---------+-----------------------+
-| ``rgw_num_zone_opstate_shards``     | The maximum number of shards for  | Integer | ``128``               |
-|                                     | keeping inter-zone group          |         |                       |
-|                                     | synchronization progress.         |         |                       |
 +-------------------------------------+-----------------------------------+---------+-----------------------+
 
 

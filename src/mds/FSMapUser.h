@@ -16,7 +16,7 @@
 
 #include <map>
 #include <string>
-#include <boost/utility/string_view.hpp>
+#include <string_view>
 
 #include "mds/mdstypes.h"
 
@@ -27,7 +27,7 @@ public:
     std::string name;
     fs_info_t() : cid(FS_CLUSTER_ID_NONE) {}
     void encode(bufferlist& bl, uint64_t features) const;
-    void decode(bufferlist::iterator &bl);
+    void decode(bufferlist::const_iterator &bl);
   };
 
   epoch_t epoch;
@@ -39,7 +39,7 @@ public:
 
   epoch_t get_epoch() const { return epoch; }
 
-  fs_cluster_id_t get_fs_cid(boost::string_view name) const {
+  fs_cluster_id_t get_fs_cid(std::string_view name) const {
     for (auto &p : filesystems) {
       if (p.second.name == name)
 	return p.first;
@@ -48,7 +48,7 @@ public:
   }
 
   void encode(bufferlist& bl, uint64_t features) const;
-  void decode(bufferlist::iterator& bl);
+  void decode(bufferlist::const_iterator& bl);
 
   void print(ostream& out) const;
   void print_summary(Formatter *f, ostream *out);

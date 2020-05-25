@@ -2,6 +2,9 @@ import logging
 import sys
 
 
+terminal_logger = logging.getLogger('terminal')
+
+
 class colorize(str):
     """
     Pretty simple to use::
@@ -22,10 +25,9 @@ class colorize(str):
     """
 
     def __init__(self, string):
-        self.stdout = sys.__stdout__
         self.appends = ''
         self.prepends = ''
-        self.isatty = self.stdout.isatty()
+        self.isatty = sys.__stderr__.isatty()
 
     def _set_attributes(self):
         """
@@ -80,7 +82,9 @@ yellow_arrow = yellow('--> ')
 class _Write(object):
 
     def __init__(self, _writer=None, prefix='', suffix='', flush=False):
-        self._writer = _writer or sys.stdout
+        # we can't set sys.stderr as the default for _writer. otherwise
+        # pytest's capturing gets confused
+        self._writer = _writer or sys.stderr
         self.suffix = suffix
         self.prefix = prefix
         self.flush = flush
@@ -94,9 +98,17 @@ class _Write(object):
         self.write(string)
 
     def write(self, line):
-        self._writer.write(self.prefix + line + self.suffix)
-        if self.flush:
-            self._writer.flush()
+        entry = self.prefix + line + self.suffix
+
+        try:
+            self._writer.write(entry)
+            if self.flush:
+                self._writer.flush()
+        except (UnicodeDecodeError, UnicodeEncodeError):
+            try:
+                terminal_logger.info(entry.strip('\n'))
+            except (AttributeError, TypeError):
+                terminal_logger.info(entry)
 
 
 def stdout(msg):
@@ -187,7 +199,7 @@ def subhelp(mapper):
     """
     Look at every value of every key in the mapper and will output any
     ``class.help`` possible to return it as a string that will be sent to
-    stdout.
+    stderr.
     """
     help_text_lines = []
     for key, value in mapper.items():

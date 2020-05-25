@@ -6,6 +6,7 @@ from textwrap import dedent
 from tasks.cephfs.cephfs_test_case import CephFSTestCase
 from tasks.cephfs.fuse_mount import FuseMount
 from teuthology.exceptions import CommandFailedError
+from teuthology.misc import sudo_write_file
 
 log = logging.getLogger(__name__)
 
@@ -14,6 +15,15 @@ class TestVolumeClient(CephFSTestCase):
     # One for looking at the global filesystem, one for being
     # the VolumeClient, two for mounting the created shares
     CLIENTS_REQUIRED = 4
+    default_py_version = 'python3'
+
+    def setUp(self):
+        CephFSTestCase.setUp(self)
+        self.py_version = self.ctx.config.get('overrides', {}).\
+                          get('python', TestVolumeClient.default_py_version)
+        log.info("using python version: {python_version}".format(
+            python_version=self.py_version
+        ))
 
     def _volume_client_python(self, client, script, vol_prefix=None, ns_prefix=None):
         # Can't dedent this *and* the script we pass in, because they might have different
@@ -23,7 +33,10 @@ class TestVolumeClient(CephFSTestCase):
         if ns_prefix:
             ns_prefix = "\"" + ns_prefix + "\""
         return client.run_python("""
+from __future__ import print_function
 from ceph_volume_client import CephFSVolumeClient, VolumePath
+from sys import version_info as sys_version_info
+from rados import OSError as rados_OSError
 import logging
 log = logging.getLogger("ceph_volume_client")
 log.addHandler(logging.StreamHandler())
@@ -32,28 +45,9 @@ vc = CephFSVolumeClient("manila", "{conf_path}", "ceph", {vol_prefix}, {ns_prefi
 vc.connect()
 {payload}
 vc.disconnect()
-        """.format(payload=script, conf_path=client.config_path, vol_prefix=vol_prefix, ns_prefix=ns_prefix))
-
-    def _sudo_write_file(self, remote, path, data):
-        """
-        Write data to a remote file as super user
-
-        :param remote: Remote site.
-        :param path: Path on the remote being written to.
-        :param data: Data to be written.
-
-        Both perms and owner are passed directly to chmod.
-        """
-        remote.run(
-            args=[
-                'sudo',
-                'python',
-                '-c',
-                'import shutil, sys; shutil.copyfileobj(sys.stdin, file(sys.argv[1], "wb"))',
-                path,
-            ],
-            stdin=data,
-        )
+        """.format(payload=script, conf_path=client.config_path,
+                   vol_prefix=vol_prefix, ns_prefix=ns_prefix),
+        self.py_version)
 
     def _configure_vc_auth(self, mount, id_name):
         """
@@ -66,7 +60,7 @@ vc.disconnect()
             "mon", "allow *"
         )
         mount.client_id = id_name
-        self._sudo_write_file(mount.client_remote, mount.get_keyring_path(), out)
+        sudo_write_file(mount.client_remote, mount.get_keyring_path(), out)
         self.set_conf("client.{name}".format(name=id_name), "keyring", mount.get_keyring_path())
 
     def _configure_guest_auth(self, volumeclient_mount, guest_mount,
@@ -98,7 +92,7 @@ vc.disconnect()
             vp = VolumePath("{group_id}", "{volume_id}")
             auth_result = vc.authorize(vp, "{guest_entity}", readonly={readonly},
                                        tenant_id="{tenant_id}")
-            print auth_result['auth_key']
+            print(auth_result['auth_key'])
         """.format(
             group_id=group_id,
             volume_id=volume_id,
@@ -129,9 +123,8 @@ vc.disconnect()
             key=key
         ))
         guest_mount.client_id = guest_entity
-        self._sudo_write_file(guest_mount.client_remote,
-                              guest_mount.get_keyring_path(),
-                              keyring_txt)
+        sudo_write_file(guest_mount.client_remote,
+                        guest_mount.get_keyring_path(), keyring_txt)
 
         # Add a guest client section to the ceph config file.
         self.set_conf("client.{0}".format(guest_entity), "client quota", "True")
@@ -195,7 +188,7 @@ vc.disconnect()
         mount_path = self._volume_client_python(self.mount_b, dedent("""
             vp = VolumePath("{group_id}", "{volume_id}")
             create_result = vc.create_volume(vp, 1024*1024*{volume_size})
-            print create_result['mount_path']
+            print(create_result['mount_path'])
         """.format(
             group_id=group_id,
             volume_id=volume_id,
@@ -476,7 +469,7 @@ vc.disconnect()
                 self._volume_client_python(volumeclient_mount, dedent("""
                     vp = VolumePath("{group_id}", "{volume_id}")
                     create_result = vc.create_volume(vp, 10 * 1024 * 1024)
-                    print create_result['mount_path']
+                    print(create_result['mount_path'])
                 """.format(
                     group_id=group_id,
                     volume_id=volume_ids[i]
@@ -559,7 +552,7 @@ vc.disconnect()
         mount_path = self._volume_client_python(self.mount_b, dedent("""
             vp = VolumePath("{group_id}", u"{volume_id}")
             create_result = vc.create_volume(vp, 10)
-            print create_result['mount_path']
+            print(create_result['mount_path'])
         """.format(
             group_id=group_id,
             volume_id=volume_id
@@ -609,7 +602,7 @@ vc.disconnect()
         mount_path = self._volume_client_python(volumeclient_mount, dedent("""
             vp = VolumePath("{group_id}", "{volume_id}")
             create_result = vc.create_volume(vp, 1024*1024*10)
-            print create_result['mount_path']
+            print(create_result['mount_path'])
         """.format(
             group_id=group_id,
             volume_id=volume_id,
@@ -664,14 +657,14 @@ vc.disconnect()
         guest_entity_1 = "guest1"
         guest_entity_2 = "guest2"
 
-        log.info("print group ID: {0}".format(group_id))
+        log.info("print(group ID: {0})".format(group_id))
 
         # Create a volume.
         auths = self._volume_client_python(volumeclient_mount, dedent("""
             vp = VolumePath("{group_id}", "{volume_id}")
             vc.create_volume(vp, 1024*1024*10)
             auths = vc.get_authorized_ids(vp)
-            print auths
+            print(auths)
         """.format(
             group_id=group_id,
             volume_id=volume_id,
@@ -686,7 +679,7 @@ vc.disconnect()
             vc.authorize(vp, "{guest_entity_1}", readonly=False)
             vc.authorize(vp, "{guest_entity_2}", readonly=True)
             auths = vc.get_authorized_ids(vp)
-            print auths
+            print(auths)
         """.format(
             group_id=group_id,
             volume_id=volume_id,
@@ -694,7 +687,11 @@ vc.disconnect()
             guest_entity_2=guest_entity_2,
         )))
         # Check the list of authorized IDs and their access levels.
-        expected_result = [(u'guest1', u'rw'), (u'guest2', u'r')]
+        if self.py_version == 'python3':
+            expected_result = [('guest1', 'rw'), ('guest2', 'r')]
+        else:
+            expected_result = [(u'guest1', u'rw'), (u'guest2', u'r')]
+
         self.assertItemsEqual(str(expected_result), auths)
 
         # Disallow both the auth IDs' access to the volume.
@@ -703,7 +700,7 @@ vc.disconnect()
             vc.deauthorize(vp, "{guest_entity_1}")
             vc.deauthorize(vp, "{guest_entity_2}")
             auths = vc.get_authorized_ids(vp)
-            print auths
+            print(auths)
         """.format(
             group_id=group_id,
             volume_id=volume_id,
@@ -780,11 +777,11 @@ vc.disconnect()
             "version": 2,
             "compat_version": 1,
             "dirty": False,
-            "tenant_id": u"tenant1",
+            "tenant_id": "tenant1",
             "volumes": {
                 "groupid/volumeid": {
                     "dirty": False,
-                    "access_level": u"rw",
+                    "access_level": "rw"
                 }
             }
         }
@@ -814,7 +811,7 @@ vc.disconnect()
             "auths": {
                 "guest": {
                     "dirty": False,
-                    "access_level": u"rw"
+                    "access_level": "rw"
                 }
             }
         }
@@ -970,6 +967,66 @@ vc.disconnect()
             obj_data = obj_data
         )))
 
+    def test_put_object_versioned(self):
+        vc_mount = self.mounts[1]
+        vc_mount.umount_wait()
+        self._configure_vc_auth(vc_mount, "manila")
+
+        obj_data = 'test_data'
+        obj_name = 'test_vc_obj'
+        pool_name = self.fs.get_data_pool_names()[0]
+        self.fs.rados(['put', obj_name, '-'], pool=pool_name, stdin_data=obj_data)
+
+        self._volume_client_python(vc_mount, dedent("""
+            data, version_before = vc.get_object_and_version("{pool_name}", "{obj_name}")
+
+            if sys_version_info.major < 3:
+                data = data + 'modification1'
+            elif sys_version_info.major > 3:
+                data = str.encode(data.decode() + 'modification1')
+
+            vc.put_object_versioned("{pool_name}", "{obj_name}", data, version_before)
+            data, version_after = vc.get_object_and_version("{pool_name}", "{obj_name}")
+            assert version_after == version_before + 1
+        """).format(pool_name=pool_name, obj_name=obj_name))
+
+    def test_version_check_for_put_object_versioned(self):
+        vc_mount = self.mounts[1]
+        vc_mount.umount_wait()
+        self._configure_vc_auth(vc_mount, "manila")
+
+        obj_data = 'test_data'
+        obj_name = 'test_vc_ob_2'
+        pool_name = self.fs.get_data_pool_names()[0]
+        self.fs.rados(['put', obj_name, '-'], pool=pool_name, stdin_data=obj_data)
+
+        # Test if put_object_versioned() crosschecks the version of the
+        # given object. Being a negative test, an exception is expected.
+        expected_exception = 'rados_OSError'
+        output = self._volume_client_python(vc_mount, dedent("""
+            data, version = vc.get_object_and_version("{pool_name}", "{obj_name}")
+
+            if sys_version_info.major < 3:
+                data = data + 'm1'
+            elif sys_version_info.major > 3:
+                data = str.encode(data.decode('utf-8') + 'm1')
+
+            vc.put_object("{pool_name}", "{obj_name}", data)
+
+            if sys_version_info.major < 3:
+                data = data + 'm2'
+            elif sys_version_info.major > 3:
+                data = str.encode(data.decode('utf-8') + 'm2')
+
+            try:
+                vc.put_object_versioned("{pool_name}", "{obj_name}", data, version)
+            except {expected_exception}:
+                print('{expected_exception} raised')
+        """).format(pool_name=pool_name, obj_name=obj_name,
+                    expected_exception=expected_exception))
+        self.assertEqual(expected_exception + ' raised', output)
+
+
     def test_delete_object(self):
         vc_mount = self.mounts[1]
         vc_mount.umount_wait()
@@ -1018,7 +1075,7 @@ vc.disconnect()
         mount_path = self._volume_client_python(vc_mount, dedent("""
             vp = VolumePath("{group_id}", "{volume_id}")
             create_result = vc.create_volume(vp, 1024*1024*10)
-            print create_result['mount_path']
+            print(create_result['mount_path'])
         """.format(
             group_id=group_id,
             volume_id=volume_id
@@ -1057,7 +1114,7 @@ vc.disconnect()
         mount_path = self._volume_client_python(vc_mount, dedent("""
             vp = VolumePath("{group_id}", "{volume_id}")
             create_result = vc.create_volume(vp, 1024*1024*10, namespace_isolated=False)
-            print create_result['mount_path']
+            print(create_result['mount_path'])
         """.format(
             group_id=group_id,
             volume_id=volume_id

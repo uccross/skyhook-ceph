@@ -46,14 +46,15 @@ public:
       entity_name_t entity2(entity_name_t::CLIENT(2));
 
       cls_lock_get_info_reply reply;
-      reply.lockers = decltype(reply.lockers){
-        {rados::cls::lock::locker_id_t(entity1, "cookie1"),
-         rados::cls::lock::locker_info_t()},
-        {rados::cls::lock::locker_id_t(entity2, "cookie2"),
-         rados::cls::lock::locker_info_t()}};
+      reply.lockers.emplace(
+        rados::cls::lock::locker_id_t(entity1, "cookie1"),
+        rados::cls::lock::locker_info_t());
+      reply.lockers.emplace(
+        rados::cls::lock::locker_id_t(entity2, "cookie2"),
+        rados::cls::lock::locker_info_t());
 
       bufferlist bl;
-      ::encode(reply, bl, CEPH_FEATURES_SUPPORTED_DEFAULT);
+      encode(reply, bl, CEPH_FEATURES_SUPPORTED_DEFAULT);
 
       std::string str(bl.c_str(), bl.length());
       expect.WillOnce(DoAll(WithArg<5>(CopyInBufferlist(str)), Return(r)));

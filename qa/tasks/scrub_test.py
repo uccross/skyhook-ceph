@@ -31,7 +31,7 @@ def wait_for_victim_pg(manager):
 
 def find_victim_object(ctx, pg, osd):
     """Return a file to be fuzzed"""
-    (osd_remote,) = ctx.cluster.only('osd.%d' % osd).remotes.iterkeys()
+    (osd_remote,) = ctx.cluster.only('osd.%d' % osd).remotes.keys()
     data_path = os.path.join(
         '/var/lib/ceph/osd',
         'ceph-{id}'.format(id=osd),
@@ -342,12 +342,13 @@ def task(ctx, config):
         - deep-scrub [0-9]+ errors
         - repair 0 missing, 1 inconsistent objects
         - repair [0-9]+ errors, [0-9]+ fixed
-        - shard [0-9]+ missing
+        - shard [0-9]+ .* : missing
         - deep-scrub 1 missing, 1 inconsistent objects
         - does not match object info size
         - attr name mistmatch
         - deep-scrub 1 missing, 0 inconsistent objects
         - failed to pick suitable auth object
+        - candidate size [0-9]+ info size [0-9]+ mismatch
       conf:
         osd:
           osd deep scrub update digest min age: 0
@@ -358,7 +359,7 @@ def task(ctx, config):
     assert isinstance(config, dict), \
         'scrub_test task only accepts a dict for configuration'
     first_mon = teuthology.get_first_mon(ctx, config)
-    (mon,) = ctx.cluster.only(first_mon).remotes.iterkeys()
+    (mon,) = ctx.cluster.only(first_mon).remotes.keys()
 
     num_osds = teuthology.num_instances_of_type(ctx.cluster, 'osd')
     log.info('num_osds is %s' % num_osds)

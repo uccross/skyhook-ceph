@@ -4,6 +4,7 @@
 #include "test/librbd/test_mock_fixture.h"
 #include "test/librbd/test_support.h"
 #include "test/librbd/mock/MockImageCtx.h"
+#include "test/librbd/mock/exclusive_lock/MockPolicy.h"
 #include "librbd/ExclusiveLock.h"
 #include "librbd/ManagedLock.h"
 #include "librbd/exclusive_lock/PreAcquireRequest.h"
@@ -92,7 +93,7 @@ struct BaseRequest {
 
   static T* create(MockExclusiveLockImageCtx &image_ctx,
                    Context *on_lock_unlock, Context *on_finish) {
-    assert(!s_requests.empty());
+    ceph_assert(!s_requests.empty());
     T* req = s_requests.front();
     req->on_lock_unlock = on_lock_unlock;
     req->on_finish = on_finish;
@@ -176,6 +177,10 @@ public:
     EXPECT_CALL(managed_lock, set_state_waiting_for_lock());
   }
 
+  void expect_set_state_post_acquiring(MockManagedLock &managed_lock) {
+    EXPECT_CALL(managed_lock, set_state_post_acquiring());
+  }
+
   void expect_is_state_acquiring(MockManagedLock &managed_lock, bool ret_val) {
     EXPECT_CALL(managed_lock, is_state_acquiring())
       .WillOnce(Return(ret_val));
@@ -246,10 +251,13 @@ public:
       .WillOnce(CompleteRequest(&pre_acquire_request, r));
   }
 
-  void expect_post_acquire_request(MockPostAcquireRequest &post_acquire_request,
+  void expect_post_acquire_request(MockExclusiveLock &mock_exclusive_lock,
+                                   MockPostAcquireRequest &post_acquire_request,
                                    int r) {
     EXPECT_CALL(post_acquire_request, send())
-      .WillOnce(CompleteRequest(&post_acquire_request, r));
+      .WillOnce(DoAll(FinishLockUnlock(&post_acquire_request),
+                      CompleteRequest(&post_acquire_request, r)));
+    expect_set_state_post_acquiring(mock_exclusive_lock);
   }
 
   void expect_pre_release_request(MockPreReleaseRequest &pre_release_request,
@@ -281,6 +289,16 @@ public:
   void expect_shut_down(MockManagedLock &managed_lock) {
     EXPECT_CALL(managed_lock, shut_down(_))
       .WillOnce(CompleteContext(0, static_cast<ContextWQ*>(nullptr)));
+  }
+
+  void expect_accept_blocked_request(
+      MockExclusiveLockImageCtx &mock_image_ctx,
+      exclusive_lock::MockPolicy &policy,
+      exclusive_lock::OperationRequestType request_type, bool value) {
+    EXPECT_CALL(mock_image_ctx, get_exclusive_lock_policy())
+      .WillOnce(Return(&policy));
+    EXPECT_CALL(policy, accept_blocked_request(request_type))
+      .WillOnce(Return(value));
   }
 
   int when_init(MockExclusiveLockImageCtx &mock_image_ctx,
@@ -364,7 +382,7 @@ TEST_F(TestMockExclusiveLock, StateTransitions) {
   ASSERT_EQ(0, when_pre_acquire_lock_handler(exclusive_lock));
 
   MockPostAcquireRequest try_lock_post_acquire;
-  expect_post_acquire_request(try_lock_post_acquire, 0);
+  expect_post_acquire_request(exclusive_lock, try_lock_post_acquire, 0);
   expect_is_state_acquiring(exclusive_lock, true);
   expect_notify_acquired_lock(mock_image_ctx);
   expect_unblock_writes(mock_image_ctx);
@@ -386,7 +404,7 @@ TEST_F(TestMockExclusiveLock, StateTransitions) {
   ASSERT_EQ(0, when_pre_acquire_lock_handler(exclusive_lock));
 
   MockPostAcquireRequest request_lock_post_acquire;
-  expect_post_acquire_request(request_lock_post_acquire, 0);
+  expect_post_acquire_request(exclusive_lock, request_lock_post_acquire, 0);
   expect_is_state_acquiring(exclusive_lock, true);
   expect_notify_acquired_lock(mock_image_ctx);
   expect_unblock_writes(mock_image_ctx);
@@ -570,7 +588,8 @@ TEST_F(TestMockExclusiveLock, PostAcquireLockError) {
   ASSERT_EQ(0, when_pre_acquire_lock_handler(exclusive_lock));
 
   MockPostAcquireRequest request_lock_post_acquire;
-  expect_post_acquire_request(request_lock_post_acquire, -EPERM);
+  expect_post_acquire_request(exclusive_lock, request_lock_post_acquire,
+                              -EPERM);
   expect_is_state_acquiring(exclusive_lock, true);
   ASSERT_EQ(-EPERM, when_post_acquire_lock_handler(exclusive_lock, 0));
 }
@@ -623,7 +642,7 @@ TEST_F(TestMockExclusiveLock, ReacquireLock) {
   ASSERT_EQ(0, when_pre_acquire_lock_handler(exclusive_lock));
 
   MockPostAcquireRequest try_lock_post_acquire;
-  expect_post_acquire_request(try_lock_post_acquire, 0);
+  expect_post_acquire_request(exclusive_lock, try_lock_post_acquire, 0);
   expect_is_state_acquiring(exclusive_lock, true);
   expect_notify_acquired_lock(mock_image_ctx);
   expect_unblock_writes(mock_image_ctx);
@@ -655,6 +674,7 @@ TEST_F(TestMockExclusiveLock, BlockRequests) {
 
   MockExclusiveLockImageCtx mock_image_ctx(*ictx);
   MockExclusiveLock exclusive_lock(mock_image_ctx);
+  exclusive_lock::MockPolicy mock_exclusive_lock_policy;
 
   expect_op_work_queue(mock_image_ctx);
 
@@ -667,19 +687,35 @@ TEST_F(TestMockExclusiveLock, BlockRequests) {
   int ret_val;
   expect_is_state_shutdown(exclusive_lock, false);
   expect_is_state_locked(exclusive_lock, true);
-  ASSERT_TRUE(exclusive_lock.accept_requests(&ret_val));
+  ASSERT_TRUE(exclusive_lock.accept_request(
+                exclusive_lock::OPERATION_REQUEST_TYPE_GENERAL, &ret_val));
   ASSERT_EQ(0, ret_val);
 
   exclusive_lock.block_requests(-EROFS);
   expect_is_state_shutdown(exclusive_lock, false);
   expect_is_state_locked(exclusive_lock, true);
-  ASSERT_FALSE(exclusive_lock.accept_requests(&ret_val));
+  expect_accept_blocked_request(mock_image_ctx, mock_exclusive_lock_policy,
+                                exclusive_lock::OPERATION_REQUEST_TYPE_GENERAL,
+                                false);
+  ASSERT_FALSE(exclusive_lock.accept_request(
+                 exclusive_lock::OPERATION_REQUEST_TYPE_GENERAL, &ret_val));
   ASSERT_EQ(-EROFS, ret_val);
+
+  expect_is_state_shutdown(exclusive_lock, false);
+  expect_is_state_locked(exclusive_lock, true);
+  expect_accept_blocked_request(
+    mock_image_ctx, mock_exclusive_lock_policy,
+    exclusive_lock::OPERATION_REQUEST_TYPE_TRASH_SNAP_REMOVE, true);
+  ASSERT_TRUE(exclusive_lock.accept_request(
+                exclusive_lock::OPERATION_REQUEST_TYPE_TRASH_SNAP_REMOVE,
+                &ret_val));
+  ASSERT_EQ(0, ret_val);
 
   exclusive_lock.unblock_requests();
   expect_is_state_shutdown(exclusive_lock, false);
   expect_is_state_locked(exclusive_lock, true);
-  ASSERT_TRUE(exclusive_lock.accept_requests(&ret_val));
+  ASSERT_TRUE(exclusive_lock.accept_request(
+                exclusive_lock::OPERATION_REQUEST_TYPE_GENERAL, &ret_val));
   ASSERT_EQ(0, ret_val);
 }
 

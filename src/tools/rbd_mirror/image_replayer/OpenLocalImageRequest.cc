@@ -5,6 +5,7 @@
 #include "CloseImageRequest.h"
 #include "IsPrimaryRequest.h"
 #include "OpenLocalImageRequest.h"
+#include "common/debug.h"
 #include "common/errno.h"
 #include "common/WorkQueue.h"
 #include "librbd/ExclusiveLock.h"
@@ -59,6 +60,14 @@ struct MirrorExclusiveLockPolicy : public librbd::exclusive_lock::Policy {
     return r;
   }
 
+  bool accept_blocked_request(
+      librbd::exclusive_lock::OperationRequestType request_type) override {
+    if (request_type ==
+        librbd::exclusive_lock::OPERATION_REQUEST_TYPE_TRASH_SNAP_REMOVE) {
+      return true;
+    }
+    return false;
+  }
 };
 
 struct MirrorJournalPolicy : public librbd::journal::Policy {
@@ -117,7 +126,7 @@ void OpenLocalImageRequest<I>::send_open_image() {
   Context *ctx = create_context_callback<
     OpenLocalImageRequest<I>, &OpenLocalImageRequest<I>::handle_open_image>(
       this);
-  (*m_local_image_ctx)->state->open(false, ctx);
+  (*m_local_image_ctx)->state->open(0, ctx);
 }
 
 template <typename I>
@@ -125,8 +134,12 @@ void OpenLocalImageRequest<I>::handle_open_image(int r) {
   dout(20) << ": r=" << r << dendl;
 
   if (r < 0) {
-    derr << ": failed to open image '" << m_local_image_id << "': "
-         << cpp_strerror(r) << dendl;
+    if (r == -ENOENT) {
+      dout(10) << ": local image does not exist" << dendl;
+    } else {
+      derr << ": failed to open image '" << m_local_image_id << "': "
+           << cpp_strerror(r) << dendl;
+    }
     (*m_local_image_ctx)->destroy();
     *m_local_image_ctx = nullptr;
     finish(r);
@@ -239,7 +252,7 @@ template <typename I>
 void OpenLocalImageRequest<I>::handle_close_image(int r) {
   dout(20) << dendl;
 
-  assert(r == 0);
+  ceph_assert(r == 0);
   finish(m_ret_val);
 }
 

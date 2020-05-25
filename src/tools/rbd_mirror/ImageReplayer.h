@@ -16,7 +16,7 @@
 #include "librbd/journal/Types.h"
 #include "librbd/journal/TypeTraits.h"
 #include "ProgressContext.h"
-#include "types.h"
+#include "tools/rbd_mirror/Types.h"
 #include "tools/rbd_mirror/image_replayer/Types.h"
 
 #include <boost/noncopyable.hpp>
@@ -29,6 +29,7 @@
 #include <vector>
 
 class AdminSocketHook;
+class PerfCounters;
 
 namespace journal {
 
@@ -47,7 +48,6 @@ namespace journal { template <typename> class Replay; }
 namespace rbd {
 namespace mirror {
 
-template <typename> struct ImageDeleter;
 template <typename> struct InstanceWatcher;
 template <typename> struct Threads;
 
@@ -62,20 +62,17 @@ template <typename ImageCtxT = librbd::ImageCtx>
 class ImageReplayer {
 public:
   static ImageReplayer *create(
-    Threads<ImageCtxT> *threads, ImageDeleter<ImageCtxT>* image_deleter,
-    InstanceWatcher<ImageCtxT> *instance_watcher,
+    Threads<ImageCtxT> *threads, InstanceWatcher<ImageCtxT> *instance_watcher,
     RadosRef local, const std::string &local_mirror_uuid, int64_t local_pool_id,
     const std::string &global_image_id) {
-    return new ImageReplayer(threads, image_deleter, instance_watcher,
-                             local, local_mirror_uuid, local_pool_id,
-                             global_image_id);
+    return new ImageReplayer(threads, instance_watcher, local,
+                             local_mirror_uuid, local_pool_id, global_image_id);
   }
   void destroy() {
     delete this;
   }
 
   ImageReplayer(Threads<ImageCtxT> *threads,
-                ImageDeleter<ImageCtxT>* image_deleter,
                 InstanceWatcher<ImageCtxT> *instance_watcher,
                 RadosRef local, const std::string &local_mirror_uuid,
                 int64_t local_pool_id, const std::string &global_image_id);
@@ -120,7 +117,7 @@ public:
   void stop(Context *on_finish = nullptr, bool manual = false,
 	    int r = 0, const std::string& desc = "");
   void restart(Context *on_finish = nullptr);
-  void flush(Context *on_finish = nullptr);
+  void flush();
 
   void resync_image(Context *on_finish=nullptr);
 
@@ -137,9 +134,6 @@ protected:
    *    |                                                   ^
    *    v                                                   *
    * <starting>                                             *
-   *    |                                                   *
-   *    v                                                   *
-   * WAIT_FOR_DELETION                                      *
    *    |                                                   *
    *    v                                           (error) *
    * PREPARE_LOCAL_IMAGE  * * * * * * * * * * * * * * * * * *
@@ -203,15 +197,11 @@ protected:
    * @endverbatim
    */
 
-  virtual void on_start_fail(int r, const std::string &desc = "");
+  virtual void on_start_fail(int r, const std::string &desc);
   virtual bool on_start_interrupted();
+  virtual bool on_start_interrupted(Mutex& lock);
 
   virtual void on_stop_journal_replay(int r = 0, const std::string &desc = "");
-
-  virtual void on_flush_local_replay_flush_start(Context *on_flush);
-  virtual void on_flush_local_replay_flush_finish(Context *on_flush, int r);
-  virtual void on_flush_flush_commit_position_start(Context *on_flush);
-  virtual void on_flush_flush_commit_position_finish(Context *on_flush, int r);
 
   bool on_replay_interrupted();
 
@@ -276,7 +266,6 @@ private:
   };
 
   Threads<ImageCtxT> *m_threads;
-  ImageDeleter<ImageCtxT>* m_image_deleter;
   InstanceWatcher<ImageCtxT> *m_instance_watcher;
 
   Peers m_peers;
@@ -294,7 +283,8 @@ private:
   State m_state = STATE_STOPPED;
   std::string m_state_desc;
 
-  OptionalMirrorImageStatusState m_mirror_image_status_state = boost::none;
+  OptionalMirrorImageStatusState m_mirror_image_status_state =
+    boost::make_optional(false, cls::rbd::MIRROR_IMAGE_STATUS_STATE_UNKNOWN);
   int m_last_r = 0;
 
   BootstrapProgressContext m_progress_cxt;
@@ -306,7 +296,7 @@ private:
   image_replayer::EventPreprocessor<ImageCtxT> *m_event_preprocessor = nullptr;
   image_replayer::ReplayStatusFormatter<ImageCtxT> *m_replay_status_formatter =
     nullptr;
-  librados::IoCtx m_local_ioctx;
+  IoCtxRef m_local_ioctx;
   ImageCtxT *m_local_image_ctx = nullptr;
   std::string m_local_image_tag_owner;
 
@@ -325,6 +315,7 @@ private:
   bool m_manual_stop = false;
 
   AdminSocketHook *m_asok_hook = nullptr;
+  PerfCounters *m_perf_counters = nullptr;
 
   image_replayer::BootstrapRequest<ImageCtxT> *m_bootstrap_request = nullptr;
 
@@ -337,6 +328,7 @@ private:
   librbd::journal::MirrorPeerClientMeta m_client_meta;
 
   ReplayEntry m_replay_entry;
+  utime_t m_replay_start_time;
   bool m_replay_tag_valid = false;
   uint64_t m_replay_tag_tid = 0;
   cls::journal::Tag m_replay_tag;
@@ -356,13 +348,16 @@ private:
   struct C_ReplayCommitted : public Context {
     ImageReplayer *replayer;
     ReplayEntry replay_entry;
+    utime_t replay_start_time;
 
     C_ReplayCommitted(ImageReplayer *replayer,
-                      ReplayEntry &&replay_entry)
-      : replayer(replayer), replay_entry(std::move(replay_entry)) {
+                      ReplayEntry &&replay_entry,
+                      const utime_t &replay_start_time)
+      : replayer(replayer), replay_entry(std::move(replay_entry)),
+        replay_start_time(replay_start_time) {
     }
     void finish(int r) override {
-      replayer->handle_process_entry_safe(replay_entry, r);
+      replayer->handle_process_entry_safe(replay_entry, replay_start_time, r);
     }
   };
 
@@ -379,20 +374,23 @@ private:
             m_state == STATE_REPLAY_FLUSHING);
   }
 
+  void flush_local_replay(Context* on_flush);
+  void handle_flush_local_replay(Context* on_flush, int r);
+
+  void flush_commit_position(Context* on_flush);
+  void handle_flush_commit_position(Context* on_flush, int r);
+
   bool update_mirror_image_status(bool force, const OptionalState &state);
   bool start_mirror_image_status_update(bool force, bool restarting);
   void finish_mirror_image_status_update();
   void queue_mirror_image_status_update(const OptionalState &state);
   void send_mirror_status_update(const OptionalState &state);
   void handle_mirror_status_update(int r);
-  void reschedule_update_status_task(int new_interval = 0);
+  void reschedule_update_status_task(int new_interval);
 
   void shut_down(int r);
   void handle_shut_down(int r);
   void handle_remote_journal_metadata_updated();
-
-  void wait_for_deletion();
-  void handle_wait_for_deletion(int r);
 
   void prepare_local_image();
   void handle_prepare_local_image(int r);
@@ -424,7 +422,8 @@ private:
 
   void process_entry();
   void handle_process_entry_ready(int r);
-  void handle_process_entry_safe(const ReplayEntry& replay_entry, int r);
+  void handle_process_entry_safe(const ReplayEntry& replay_entry,
+                                 const utime_t &m_replay_start_time, int r);
 
   void register_admin_socket_hook();
   void unregister_admin_socket_hook();

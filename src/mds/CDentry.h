@@ -18,7 +18,7 @@
 #define CEPH_CDENTRY_H
 
 #include <string>
-#include <boost/utility/string_view.hpp>
+#include <string_view>
 #include <set>
 
 #include "include/counter.h"
@@ -29,6 +29,7 @@
 #include "include/filepath.h"
 
 #include "MDSCacheObject.h"
+#include "MDSContext.h"
 #include "SimpleLock.h"
 #include "LocalLock.h"
 #include "ScrubHeader.h"
@@ -36,7 +37,6 @@
 class CInode;
 class CDir;
 class Locker;
-class Message;
 class CDentry;
 class LogSegment;
 
@@ -102,7 +102,7 @@ public:
   static const unsigned EXPORT_NONCE = 1;
 
 
-  CDentry(boost::string_view n, __u32 h,
+  CDentry(std::string_view n, __u32 h,
 	  snapid_t f, snapid_t l) :
     hash(h),
     first(f), last(l),
@@ -111,7 +111,7 @@ public:
     versionlock(this, &versionlock_type),
     name(n)
   {}
-  CDentry(boost::string_view n, __u32 h, inodeno_t ino, unsigned char dt,
+  CDentry(std::string_view n, __u32 h, inodeno_t ino, unsigned char dt,
 	  snapid_t f, snapid_t l) :
     hash(h),
     first(f), last(l),
@@ -124,7 +124,7 @@ public:
     linkage.remote_d_type = dt;
   }
 
-  const char *pin_name(int p) const override {
+  std::string_view pin_name(int p) const override {
     switch (p) {
     case PIN_INODEPIN: return "inodepin";
     case PIN_FRAGMENTING: return "fragmenting";
@@ -137,7 +137,7 @@ public:
   // -- wait --
   //static const int WAIT_LOCK_OFFSET = 8;
 
-  void add_waiter(uint64_t tag, MDSInternalContextBase *c) override;
+  void add_waiter(uint64_t tag, MDSContext *c) override;
 
   bool is_lt(const MDSCacheObject *r) const override {
     return *this < *static_cast<const CDentry*>(r);
@@ -149,7 +149,7 @@ public:
 
   const CDir *get_dir() const { return dir; }
   CDir *get_dir() { return dir; }
-  boost::string_view get_name() const { return boost::string_view(name); }
+  std::string_view get_name() const { return std::string_view(name); }
 
   __u32 get_hash() const { return hash; }
 
@@ -206,10 +206,10 @@ public:
   void _put() override;
 
   // auth pins
-  bool can_auth_pin() const override;
+  bool can_auth_pin(int *err_ret=nullptr) const override;
   void auth_pin(void *by) override;
   void auth_unpin(void *by) override;
-  void adjust_nested_auth_pins(int adjustment, int diradj, void *by);
+  void adjust_nested_auth_pins(int diradj, void *by);
   bool is_frozen() const override;
   bool is_freezing() const override;
   int get_num_dir_auth_pins() const;
@@ -245,29 +245,26 @@ public:
   
   // -- replication
   void encode_replica(mds_rank_t mds, bufferlist& bl, bool need_recover) {
-    if (!is_replicated())
-      lock.replicate_relax();
-
     __u32 nonce = add_replica(mds);
-    ::encode(nonce, bl);
-    ::encode(first, bl);
-    ::encode(linkage.remote_ino, bl);
-    ::encode(linkage.remote_d_type, bl);
+    encode(nonce, bl);
+    encode(first, bl);
+    encode(linkage.remote_ino, bl);
+    encode(linkage.remote_d_type, bl);
     lock.encode_state_for_replica(bl);
-    ::encode(need_recover, bl);
+    encode(need_recover, bl);
   }
-  void decode_replica(bufferlist::iterator& p, bool is_new);
+  void decode_replica(bufferlist::const_iterator& p, bool is_new);
 
   // -- exporting
   // note: this assumes the dentry already exists.  
   // i.e., the name is already extracted... so we just need the other state.
   void encode_export(bufferlist& bl) {
-    ::encode(first, bl);
-    ::encode(state, bl);
-    ::encode(version, bl);
-    ::encode(projected_version, bl);
-    ::encode(lock, bl);
-    ::encode(get_replicas(), bl);
+    encode(first, bl);
+    encode(state, bl);
+    encode(version, bl);
+    encode(projected_version, bl);
+    encode(lock, bl);
+    encode(get_replicas(), bl);
     get(PIN_TEMPEXPORTING);
   }
   void finish_export() {
@@ -282,14 +279,14 @@ public:
   void abort_export() {
     put(PIN_TEMPEXPORTING);
   }
-  void decode_import(bufferlist::iterator& blp, LogSegment *ls) {
-    ::decode(first, blp);
+  void decode_import(bufferlist::const_iterator& blp, LogSegment *ls) {
+    decode(first, blp);
     __u32 nstate;
-    ::decode(nstate, blp);
-    ::decode(version, blp);
-    ::decode(projected_version, blp);
-    ::decode(lock, blp);
-    ::decode(get_replicas(), blp);
+    decode(nstate, blp);
+    decode(version, blp);
+    decode(projected_version, blp);
+    decode(lock, blp);
+    decode(get_replicas(), blp);
 
     // twiddle
     state &= MASK_STATE_IMPORT_KEPT;
@@ -303,12 +300,12 @@ public:
 
   // -- locking --
   SimpleLock* get_lock(int type) override {
-    assert(type == CEPH_LOCK_DN);
+    ceph_assert(type == CEPH_LOCK_DN);
     return &lock;
   }
   void set_object_info(MDSCacheObjectInfo &info) override;
   void encode_lock_state(int type, bufferlist& bl) override;
-  void decode_lock_state(int type, bufferlist& bl) override;
+  void decode_lock_state(int type, const bufferlist& bl) override;
 
   // ---------------------------------------------
   // replicas (on clients)

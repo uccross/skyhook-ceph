@@ -1,0 +1,41 @@
+overrides:
+  ceph:
+    conf:
+      client.2:
+        debug ms: 1
+        debug objecter: 20
+        debug rados: 20
+tasks:
+- full_sequential:
+  - radosbench:
+      objectsize: 0
+      clients: [client.2]
+      time: 90
+  - radosbench:
+      objectsize: 0
+      clients: [client.2]
+      time: 90
+  - radosbench:
+      objectsize: 0
+      clients: [client.2]
+      time: 90
+  - radosbench:
+      objectsize: 0
+      clients: [client.2]
+      time: 90
+  - radosbench:
+      objectsize: 0
+      clients: [client.2]
+      time: 90
+  - radosbench:
+      objectsize: 0
+      clients: [client.2]
+      time: 90
+  - radosbench:
+      objectsize: 0
+      clients: [client.2]
+      time: 90
+  - radosbench:
+      objectsize: 0
+      clients: [client.2]
+      time: 90

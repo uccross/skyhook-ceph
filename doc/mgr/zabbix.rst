@@ -1,7 +1,7 @@
-Zabbix plugin
+Zabbix Module
 =============
 
-The Zabbix plugin actively sends information to a Zabbix server like:
+The Zabbix module actively sends information to a Zabbix server like:
 
 - Ceph status
 - I/O operations
@@ -12,7 +12,7 @@ The Zabbix plugin actively sends information to a Zabbix server like:
 Requirements
 ------------
 
-The plugin requires that the *zabbix_sender* executable is present on *all*
+The module requires that the *zabbix_sender* executable is present on *all*
 machines running ceph-mgr. It can be installed on most distributions using
 the package manager.
 
@@ -36,18 +36,11 @@ On Fedora:
 
 Enabling
 --------
-
-Add this to your ceph.conf on nodes where you run ceph-mgr:
+You can enable the *zabbix* module with:
 
 ::
 
-    [mgr]
-        mgr modules = zabbix
-
-If you use any other ceph-mgr modules, make sure they're in the list too.
-
-Restart the ceph-mgr daemon after modifying the setting to load the module.
-
+    ceph mgr module enable zabbix
 
 Configuration
 -------------
@@ -72,9 +65,9 @@ This would for example be *ceph-c4d32a99-9e80-490f-bd3a-1d22d8a7d354*
 
 Additional configuration keys which can be configured and their default values:
 
-- mgr/zabbix/zabbix_port: 10051
-- mgr/zabbix/zabbix_sender: /usr/bin/zabbix_sender
-- mgr/zabbix/interval: 60
+- zabbix_port: 10051
+- zabbix_sender: /usr/bin/zabbix_sender
+- interval: 60
 
 Configuration keys
 ^^^^^^^^^^^^^^^^^^^
@@ -84,14 +77,57 @@ these are usually Monitors where the *client.admin* key is present.
 
 ::
 
-    ceph config-key set <key> <value>
+    ceph zabbix config-set <key> <value>
 
 For example:
 
 ::
 
-    ceph config-key set mgr/zabbix/zabbix_host zabbix.localdomain
-    ceph config-key set mgr/zabbix/identifier ceph.eu-ams02.local
+    ceph zabbix config-set zabbix_host zabbix.localdomain
+    ceph zabbix config-set identifier ceph.eu-ams02.local
+
+The current configuration of the module can also be shown:
+
+::
+
+   ceph zabbix config-show
+
+
+Template
+^^^^^^^^
+A `template <https://raw.githubusercontent.com/ceph/ceph/9c54334b615362e0a60442c2f41849ed630598ab/src/pybind/mgr/zabbix/zabbix_template.xml>`_. 
+(XML) to be used on the Zabbix server can be found in the source directory of the module.
+
+This template contains all items and a few triggers. You can customize the triggers afterwards to fit your needs.
+
+
+Multiple Zabbix servers
+^^^^^^^^^^^^^^^^^^^^^^^
+It is possible to instruct zabbix module to send data to multiple Zabbix servers.
+
+Parameter *zabbix_host* can be set with multiple hostnames separated by commas.
+Hosnames (or IP adderesses) can be followed by colon and port number. If a port
+number is not present module will use the port number defined in *zabbix_port*.
+
+For example:
+
+::
+
+    ceph zabbix config-set zabbix_host "zabbix1,zabbix2:2222,zabbix3:3333"
+
+
+Manually sending data
+---------------------
+If needed the module can be asked to send data immediately instead of waiting for
+the interval.
+
+This can be done with this command:
+
+::
+
+    ceph zabbix send
+
+The module will now send its latest data to the Zabbix server.
 
 Debugging
 ---------
@@ -104,6 +140,5 @@ ceph-mgr and check the logs.
     [mgr]
         debug mgr = 20
 
-With logging set to debug for the manager the plugin will print various logging
+With logging set to debug for the manager the module will print various logging
 lines prefixed with *mgr[zabbix]* for easy filtering.
-

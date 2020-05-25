@@ -1,3 +1,5 @@
+// -*- mode:C++; tab-width:8; c-basic-offset:2; indent-tabs-mode:t -*-
+// vim: ts=8 sw=2 smarttab
 
 #include <map>
 #include <string>
@@ -6,6 +8,7 @@
 #include <boost/algorithm/string.hpp>
 
 #include "rgw_tag.h"
+#include "rgw_common.h"
 
 static constexpr uint32_t MAX_OBJ_TAGS=10;
 static constexpr uint32_t MAX_TAG_KEY_SIZE=128;
@@ -13,6 +16,10 @@ static constexpr uint32_t MAX_TAG_VAL_SIZE=256;
 
 bool RGWObjTags::add_tag(const string&key, const string& val){
   return tag_map.emplace(std::make_pair(key,val)).second;
+}
+
+bool RGWObjTags::emplace_tag(std::string&& key, std::string&& val){
+  return tag_map.emplace(std::move(key), std::move(val)).second;
 }
 
 int RGWObjTags::check_and_add_tag(const string&key, const string& val){

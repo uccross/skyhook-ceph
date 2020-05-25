@@ -78,8 +78,8 @@ TYPED_TEST(TestObjectPlayer, Fetch) {
   journal::Entry entry2(234, 124, this->create_payload(std::string(24, '1')));
 
   bufferlist bl;
-  ::encode(entry1, bl);
-  ::encode(entry2, bl);
+  encode(entry1, bl);
+  encode(entry2, bl);
   ASSERT_EQ(0, this->append(this->get_object_name(oid), bl));
 
   journal::ObjectPlayerPtr object = this->create_object(oid, 14);
@@ -101,8 +101,8 @@ TYPED_TEST(TestObjectPlayer, FetchLarge) {
   journal::Entry entry2(234, 124, this->create_payload(""));
 
   bufferlist bl;
-  ::encode(entry1, bl);
-  ::encode(entry2, bl);
+  encode(entry1, bl);
+  encode(entry2, bl);
   ASSERT_EQ(0, this->append(this->get_object_name(oid), bl));
 
   journal::ObjectPlayerPtr object = this->create_object(oid, 12);
@@ -123,8 +123,8 @@ TYPED_TEST(TestObjectPlayer, FetchDeDup) {
   journal::Entry entry2(234, 123, this->create_payload(std::string(24, '2')));
 
   bufferlist bl;
-  ::encode(entry1, bl);
-  ::encode(entry2, bl);
+  encode(entry1, bl);
+  encode(entry2, bl);
   ASSERT_EQ(0, this->append(this->get_object_name(oid), bl));
 
   journal::ObjectPlayerPtr object = this->create_object(oid, 14);
@@ -155,21 +155,25 @@ TYPED_TEST(TestObjectPlayer, FetchCorrupt) {
 
   journal::Entry entry1(234, 123, this->create_payload(std::string(24, '1')));
   journal::Entry entry2(234, 124, this->create_payload(std::string(24, '2')));
+  journal::Entry entry3(234, 125, this->create_payload(std::string(24, '3')));
 
   bufferlist bl;
-  ::encode(entry1, bl);
-  ::encode(this->create_payload("corruption"), bl);
-  ::encode(entry2, bl);
+  encode(entry1, bl);
+  encode(this->create_payload("corruption" + std::string(1024, 'X')), bl);
+  encode(entry2, bl);
+  encode(this->create_payload("corruption" + std::string(1024, 'Y')), bl);
+  encode(entry3, bl);
   ASSERT_EQ(0, this->append(this->get_object_name(oid), bl));
 
   journal::ObjectPlayerPtr object = this->create_object(oid, 14);
   ASSERT_EQ(-EBADMSG, this->fetch(object));
+  ASSERT_EQ(0, this->fetch(object));
 
   journal::ObjectPlayer::Entries entries;
   object->get_entries(&entries);
-  ASSERT_EQ(2U, entries.size());
+  ASSERT_EQ(3U, entries.size());
 
-  journal::ObjectPlayer::Entries expected_entries = {entry1, entry2};
+  journal::ObjectPlayer::Entries expected_entries = {entry1, entry2, entry3};
   ASSERT_EQ(expected_entries, entries);
 }
 
@@ -180,7 +184,7 @@ TYPED_TEST(TestObjectPlayer, FetchAppend) {
   journal::Entry entry2(234, 124, this->create_payload(std::string(24, '2')));
 
   bufferlist bl;
-  ::encode(entry1, bl);
+  encode(entry1, bl);
   ASSERT_EQ(0, this->append(this->get_object_name(oid), bl));
 
   journal::ObjectPlayerPtr object = this->create_object(oid, 14);
@@ -194,7 +198,7 @@ TYPED_TEST(TestObjectPlayer, FetchAppend) {
   ASSERT_EQ(expected_entries, entries);
 
   bl.clear();
-  ::encode(entry2, bl);
+  encode(entry2, bl);
   ASSERT_EQ(0, this->append(this->get_object_name(oid), bl));
   ASSERT_LE(0, this->fetch(object));
 
@@ -212,8 +216,8 @@ TYPED_TEST(TestObjectPlayer, PopEntry) {
   journal::Entry entry2(234, 124, this->create_payload(std::string(24, '1')));
 
   bufferlist bl;
-  ::encode(entry1, bl);
-  ::encode(entry2, bl);
+  encode(entry1, bl);
+  encode(entry2, bl);
   ASSERT_EQ(0, this->append(this->get_object_name(oid), bl));
 
   journal::ObjectPlayerPtr object = this->create_object(oid, 14);
@@ -244,7 +248,7 @@ TYPED_TEST(TestObjectPlayer, Watch) {
   journal::Entry entry2(234, 124, this->create_payload(std::string(24, '1')));
 
   bufferlist bl;
-  ::encode(entry1, bl);
+  encode(entry1, bl);
   ASSERT_EQ(0, this->append(this->get_object_name(oid), bl));
   ASSERT_LE(0, cond1.wait());
 
@@ -260,7 +264,7 @@ TYPED_TEST(TestObjectPlayer, Watch) {
   object->watch(&cond2, 0.1);
 
   bl.clear();
-  ::encode(entry2, bl);
+  encode(entry2, bl);
   ASSERT_EQ(0, this->append(this->get_object_name(oid), bl));
   ASSERT_LE(0, cond2.wait());
 

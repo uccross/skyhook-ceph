@@ -112,11 +112,11 @@ def run(command, **kw):
     :param stop_on_error: If a nonzero exit status is return, it raises a ``RuntimeError``
     :param fail_msg: If a nonzero exit status is returned this message will be included in the log
     """
+    executable = which(command.pop(0))
+    command.insert(0, executable)
     stop_on_error = kw.pop('stop_on_error', True)
     command_msg = obfuscate(command, kw.pop('obfuscate', None))
     fail_msg = kw.pop('fail_msg', None)
-    executable = which(command.pop(0))
-    command.insert(0, executable)
     logger.info(command_msg)
     terminal.write(command_msg)
     terminal_logging = kw.pop('terminal_logging', True)
@@ -180,12 +180,12 @@ def call(command, **kw):
     :param verbose_on_failure: On a non-zero exit status, it will forcefully set logging ON for
                                the terminal. Defaults to True
     """
+    executable = which(command.pop(0))
+    command.insert(0, executable)
     terminal_verbose = kw.pop('terminal_verbose', False)
     logfile_verbose = kw.pop('logfile_verbose', True)
     verbose_on_failure = kw.pop('verbose_on_failure', True)
     show_command = kw.pop('show_command', False)
-    executable = which(command.pop(0))
-    command.insert(0, executable)
     command_msg = "Running command: %s" % ' '.join(command)
     stdin = kw.pop('stdin', None)
     logger.info(command_msg)

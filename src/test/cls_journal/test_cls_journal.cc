@@ -4,7 +4,7 @@
 #include "cls/journal/cls_journal_client.h"
 #include "include/stringify.h"
 #include "common/Cond.h"
-#include "test/librados/test.h"
+#include "test/librados/test_cxx.h"
 #include "gtest/gtest.h"
 #include <errno.h>
 #include <set>
@@ -203,7 +203,7 @@ TEST_F(TestClsJournal, GetClient) {
   ASSERT_EQ(-ENOENT, client::get_client(ioctx, oid, "id", &client));
 
   bufferlist data;
-  data.append(std::string('1', 128));
+  data.append(std::string(128, '1'));
   ASSERT_EQ(0, client::client_register(ioctx, oid, "id1", data));
 
   ASSERT_EQ(0, client::get_client(ioctx, oid, "id1", &client));
@@ -251,7 +251,7 @@ TEST_F(TestClsJournal, ClientUpdateData) {
   ASSERT_EQ(0, client::client_register(ioctx, oid, "id1", bufferlist()));
 
   bufferlist data;
-  data.append(std::string('1', 128));
+  data.append(std::string(128, '1'));
   ASSERT_EQ(0, client::client_update_data(ioctx, oid, "id1", data));
 
   Client client;
@@ -273,7 +273,7 @@ TEST_F(TestClsJournal, ClientUpdateState) {
   ASSERT_EQ(0, client::client_register(ioctx, oid, "id1", bufferlist()));
 
   bufferlist data;
-  data.append(std::string('1', 128));
+  data.append(std::string(128, '1'));
   ASSERT_EQ(0, client::client_update_state(ioctx, oid, "id1",
                                            CLIENT_STATE_DISCONNECTED));
 
