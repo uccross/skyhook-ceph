@@ -23,12 +23,14 @@
 #include <fstream>
 #include "kv/KeyValueDB.h"
 
-#include "include/assert.h"
+#include "include/ceph_assert.h"
 #include "common/Formatter.h"
 #include "common/Finisher.h"
 #include "common/errno.h"
 #include "common/debug.h"
 #include "common/safe_io.h"
+#include "common/blkdev.h"
+#include "common/PriorityCache.h"
 
 #define dout_context g_ceph_context
 
@@ -48,6 +50,17 @@ class MonitorDBStore
 
  public:
 
+  string get_devname() {
+    char devname[4096] = {0}, partition[4096];
+    get_device_by_path(path.c_str(), partition, devname,
+		       sizeof(devname));
+    return devname;
+  }
+
+  std::shared_ptr<PriorityCache::PriCache> get_priority_cache() const {
+    return db->get_priority_cache();
+  }
+
   struct Op {
     uint8_t type;
     string prefix;
@@ -56,31 +69,31 @@ class MonitorDBStore
 
     Op()
       : type(0) { }
-    Op(int t, string p, string k)
+    Op(int t, const string& p, const string& k)
       : type(t), prefix(p), key(k) { }
-    Op(int t, const string& p, string k, bufferlist& b)
+    Op(int t, const string& p, const string& k, const bufferlist& b)
       : type(t), prefix(p), key(k), bl(b) { }
-    Op(int t, const string& p, string start, string end)
+    Op(int t, const string& p, const string& start, const string& end)
       : type(t), prefix(p), key(start), endkey(end) { }
 
     void encode(bufferlist& encode_bl) const {
       ENCODE_START(2, 1, encode_bl);
-      ::encode(type, encode_bl);
-      ::encode(prefix, encode_bl);
-      ::encode(key, encode_bl);
-      ::encode(bl, encode_bl);
-      ::encode(endkey, encode_bl);
+      encode(type, encode_bl);
+      encode(prefix, encode_bl);
+      encode(key, encode_bl);
+      encode(bl, encode_bl);
+      encode(endkey, encode_bl);
       ENCODE_FINISH(encode_bl);
     }
 
-    void decode(bufferlist::iterator& decode_bl) {
+    void decode(bufferlist::const_iterator& decode_bl) {
       DECODE_START(2, decode_bl);
-      ::decode(type, decode_bl);
-      ::decode(prefix, decode_bl);
-      ::decode(key, decode_bl);
-      ::decode(bl, decode_bl);
+      decode(type, decode_bl);
+      decode(prefix, decode_bl);
+      decode(key, decode_bl);
+      decode(bl, decode_bl);
       if (struct_v >= 2)
-	::decode(endkey, decode_bl);
+	decode(endkey, decode_bl);
       DECODE_FINISH(decode_bl);
     }
 
@@ -88,8 +101,17 @@ class MonitorDBStore
       f->dump_int("type", type);
       f->dump_string("prefix", prefix);
       f->dump_string("key", key);
-      if (endkey.length())
+      if (endkey.length()) {
 	f->dump_string("endkey", endkey);
+      }
+    }
+
+    int approx_size() const {
+      return 6 + 1 +
+	4 + prefix.size() +
+	4 + key.size() +
+	4 + endkey.size() +
+	4 + bl.length();
     }
 
     static void generate_test_instances(list<Op*>& ls) {
@@ -99,71 +121,81 @@ class MonitorDBStore
   };
 
   struct Transaction;
-  typedef ceph::shared_ptr<Transaction> TransactionRef;
+  typedef std::shared_ptr<Transaction> TransactionRef;
   struct Transaction {
     list<Op> ops;
     uint64_t bytes, keys;
 
-    Transaction() : bytes(0), keys(0) {}
+    Transaction() : bytes(6 + 4 + 8*2), keys(0) {}
 
     enum {
       OP_PUT	= 1,
       OP_ERASE	= 2,
       OP_COMPACT = 3,
+      OP_ERASE_RANGE = 4,
     };
 
-    void put(string prefix, string key, bufferlist& bl) {
+    void put(const string& prefix, const string& key, const bufferlist& bl) {
       ops.push_back(Op(OP_PUT, prefix, key, bl));
       ++keys;
-      bytes += prefix.length() + key.length() + bl.length();
+      bytes += ops.back().approx_size();
     }
 
-    void put(string prefix, version_t ver, bufferlist& bl) {
+    void put(const string& prefix, version_t ver, const bufferlist& bl) {
       ostringstream os;
       os << ver;
       put(prefix, os.str(), bl);
     }
 
-    void put(string prefix, string key, version_t ver) {
+    void put(const string& prefix, const string& key, version_t ver) {
+      using ceph::encode;
       bufferlist bl;
-      ::encode(ver, bl);
+      encode(ver, bl);
       put(prefix, key, bl);
     }
 
-    void erase(string prefix, string key) {
+    void erase(const string& prefix, const string& key) {
       ops.push_back(Op(OP_ERASE, prefix, key));
       ++keys;
-      bytes += prefix.length() + key.length();
+      bytes += ops.back().approx_size();
     }
 
-    void erase(string prefix, version_t ver) {
+    void erase(const string& prefix, version_t ver) {
       ostringstream os;
       os << ver;
       erase(prefix, os.str());
     }
 
-    void compact_prefix(string prefix) {
+    void erase_range(const string& prefix, const string& begin,
+		     const string& end) {
+      ops.push_back(Op(OP_ERASE_RANGE, prefix, begin, end));
+      ++keys;
+      bytes += ops.back().approx_size();
+    }
+
+    void compact_prefix(const string& prefix) {
       ops.push_back(Op(OP_COMPACT, prefix, string()));
     }
 
-    void compact_range(string prefix, string start, string end) {
+    void compact_range(const string& prefix, const string& start,
+		       const string& end) {
       ops.push_back(Op(OP_COMPACT, prefix, start, end));
     }
 
     void encode(bufferlist& bl) const {
       ENCODE_START(2, 1, bl);
-      ::encode(ops, bl);
-      ::encode(bytes, bl);
-      ::encode(keys, bl);
+      encode(ops, bl);
+      encode(bytes, bl);
+      encode(keys, bl);
       ENCODE_FINISH(bl);
     }
 
-    void decode(bufferlist::iterator& bl) {
+    void decode(bufferlist::const_iterator& bl) {
       DECODE_START(2, bl);
-      ::decode(ops, bl);
+      decode(ops, bl);
       if (struct_v >= 2) {
-	::decode(bytes, bl);
-	::decode(keys, bl);
+	decode(bytes, bl);
+	decode(keys, bl);
       }
       DECODE_FINISH(bl);
     }
@@ -175,6 +207,7 @@ class MonitorDBStore
       bl.append("value");
       ls.back()->put("prefix", "key", bl);
       ls.back()->erase("prefix2", "key2");
+      ls.back()->erase_range("prefix3", "key3", "key4");
       ls.back()->compact_prefix("prefix3");
       ls.back()->compact_range("prefix4", "from", "to");
     }
@@ -187,7 +220,7 @@ class MonitorDBStore
 
     void append_from_encoded(bufferlist& bl) {
       auto other(std::make_shared<Transaction>());
-      bufferlist::iterator it = bl.begin();
+      auto it = bl.cbegin();
       other->decode(it);
       append(other);
     }
@@ -236,6 +269,14 @@ class MonitorDBStore
 	    f->dump_string("key", op.key);
 	  }
 	  break;
+	case OP_ERASE_RANGE:
+	  {
+	    f->dump_string("type", "ERASE_RANGE");
+	    f->dump_string("prefix", op.prefix);
+	    f->dump_string("start", op.key);
+	    f->dump_string("end", op.endkey);
+	  }
+	  break;
 	case OP_COMPACT:
 	  {
 	    f->dump_string("type", "COMPACT");
@@ -264,7 +305,7 @@ class MonitorDBStore
     KeyValueDB::Transaction dbt = db->get_transaction();
 
     if (do_dump) {
-      if (!g_conf->mon_debug_dump_json) {
+      if (!g_conf()->mon_debug_dump_json) {
         bufferlist bl;
         t->encode(bl);
         bl.write_fd(dump_fd_binary);
@@ -287,6 +328,9 @@ class MonitorDBStore
       case Transaction::OP_ERASE:
 	dbt->rmkey(op.prefix, op.key);
 	break;
+      case Transaction::OP_ERASE_RANGE:
+	dbt->rm_range_keys(op.prefix, op.key, op.endkey);
+	break;
       case Transaction::OP_COMPACT:
 	compact.push_back(make_pair(op.prefix, make_pair(op.key, op.endkey)));
 	break;
@@ -307,7 +351,7 @@ class MonitorDBStore
 	compact.pop_front();
       }
     } else {
-      assert(0 == "failed to write to db");
+      ceph_abort_msg("failed to write to db");
     }
     return r;
   }
@@ -329,10 +373,10 @@ class MonitorDBStore
        * We will now randomly inject random delays.  We can safely sleep prior
        * to applying the transaction as it won't break the model.
        */
-      double delay_prob = g_conf->mon_inject_transaction_delay_probability;
+      double delay_prob = g_conf()->mon_inject_transaction_delay_probability;
       if (delay_prob && (rand() % 10000 < delay_prob * 10000.0)) {
         utime_t delay;
-        double delay_max = g_conf->mon_inject_transaction_delay_max;
+        double delay_max = g_conf()->mon_inject_transaction_delay_max;
         delay.set_from_double(delay_max * (double)(rand() % 10000) / 10000.0);
         lsubdout(g_ceph_context, mon, 1)
           << "apply_transaction will be delayed for " << delay
@@ -371,43 +415,11 @@ class MonitorDBStore
     StoreIteratorImpl() : done(false) { }
     virtual ~StoreIteratorImpl() { }
 
-    bool add_chunk_entry(TransactionRef tx,
-			 string &prefix,
-			 string &key,
-			 bufferlist &value,
-			 uint64_t max) {
-      auto tmp(std::make_shared<Transaction>());
-      bufferlist tmp_bl;
-      tmp->put(prefix, key, value);
-      tmp->encode(tmp_bl);
-
-      bufferlist tx_bl;
-      tx->encode(tx_bl);
-
-      size_t len = tx_bl.length() + tmp_bl.length();
-
-      if (!tx->empty() && (len > max)) {
-	return false;
-      }
-
-      tx->append(tmp);
-      last_key.first = prefix;
-      last_key.second = key;
-
-      if (g_conf->mon_sync_debug) {
-	::encode(prefix, crc_bl);
-	::encode(key, crc_bl);
-	::encode(value, crc_bl);
-      }
-
-      return true;
-    }
-
     virtual bool _is_valid() = 0;
 
   public:
     __u32 crc() {
-      if (g_conf->mon_sync_debug)
+      if (g_conf()->mon_sync_debug)
 	return crc_bl.crc32c(0);
       return 0;
     }
@@ -417,10 +429,11 @@ class MonitorDBStore
     virtual bool has_next_chunk() {
       return !done && _is_valid();
     }
-    virtual void get_chunk_tx(TransactionRef tx, uint64_t max) = 0;
+    virtual void get_chunk_tx(TransactionRef tx, uint64_t max_bytes,
+			      uint64_t max_keys) = 0;
     virtual pair<string,string> get_next_key() = 0;
   };
-  typedef ceph::shared_ptr<StoreIteratorImpl> Synchronizer;
+  typedef std::shared_ptr<StoreIteratorImpl> Synchronizer;
 
   class WholeStoreIteratorImpl : public StoreIteratorImpl {
     KeyValueDB::WholeSpaceIterator iter;
@@ -445,26 +458,44 @@ class MonitorDBStore
      *			    differ from the one passed on to the function)
      * @param last_key[out] Last key in the chunk
      */
-    void get_chunk_tx(TransactionRef tx, uint64_t max) override {
-      assert(done == false);
-      assert(iter->valid() == true);
+    void get_chunk_tx(TransactionRef tx, uint64_t max_bytes,
+		      uint64_t max_keys) override {
+      ceph_assert(done == false);
+      ceph_assert(iter->valid() == true);
 
       while (iter->valid()) {
 	string prefix(iter->raw_key().first);
 	string key(iter->raw_key().second);
 	if (sync_prefixes.count(prefix)) {
 	  bufferlist value = iter->value();
-	  if (!add_chunk_entry(tx, prefix, key, value, max))
+	  if (tx->empty() ||
+	      (tx->get_bytes() + value.length() + key.size() +
+	       prefix.size() < max_bytes &&
+	       tx->get_keys() < max_keys)) {
+	    // NOTE: putting every key in a separate transaction is
+	    // questionable as far as efficiency goes
+	    auto tmp(std::make_shared<Transaction>());
+	    tmp->put(prefix, key, value);
+	    tx->append(tmp);
+	    if (g_conf()->mon_sync_debug) {
+	      encode(prefix, crc_bl);
+	      encode(key, crc_bl);
+	      encode(value, crc_bl);
+	    }
+	  } else {
+	    last_key.first = prefix;
+	    last_key.second = key;
 	    return;
+	  }
 	}
 	iter->next();
       }
-      assert(iter->valid() == false);
+      ceph_assert(iter->valid() == false);
       done = true;
     }
 
     pair<string,string> get_next_key() override {
-      assert(iter->valid());
+      ceph_assert(iter->valid());
 
       for (; iter->valid(); iter->next()) {
         pair<string,string> r = iter->raw_key();
@@ -484,20 +515,20 @@ class MonitorDBStore
   Synchronizer get_synchronizer(pair<string,string> &key,
 				set<string> &prefixes) {
     KeyValueDB::WholeSpaceIterator iter;
-    iter = db->get_iterator();
+    iter = db->get_wholespace_iterator();
 
     if (!key.first.empty() && !key.second.empty())
       iter->upper_bound(key.first, key.second);
     else
       iter->seek_to_first();
 
-    return ceph::shared_ptr<StoreIteratorImpl>(
+    return std::shared_ptr<StoreIteratorImpl>(
 	new WholeStoreIteratorImpl(iter, prefixes)
     );
   }
 
   KeyValueDB::Iterator get_iterator(const string &prefix) {
-    assert(!prefix.empty());
+    ceph_assert(!prefix.empty());
     KeyValueDB::Iterator iter = db->get_iterator(prefix);
     iter->seek_to_first();
     return iter;
@@ -505,13 +536,13 @@ class MonitorDBStore
 
   KeyValueDB::WholeSpaceIterator get_iterator() {
     KeyValueDB::WholeSpaceIterator iter;
-    iter = db->get_iterator();
+    iter = db->get_wholespace_iterator();
     iter->seek_to_first();
     return iter;
   }
 
   int get(const string& prefix, const string& key, bufferlist& bl) {
-    assert(bl.length() == 0);
+    ceph_assert(bl.length() == 0);
     return db->get(prefix, key, &bl);
   }
 
@@ -532,13 +563,13 @@ class MonitorDBStore
       generic_dout(0) << "MonitorDBStore::get() error obtaining"
                       << " (" << prefix << ":" << key << "): "
                       << cpp_strerror(err) << dendl;
-      assert(0 == "error obtaining key");
+      ceph_abort_msg("error obtaining key");
     }
 
-    assert(bl.length());
+    ceph_assert(bl.length());
     version_t ver;
-    bufferlist::iterator p = bl.begin();
-    ::decode(ver, p);
+    auto p = bl.cbegin();
+    decode(ver, p);
     return ver;
   }
 
@@ -578,10 +609,10 @@ class MonitorDBStore
       dbt->rmkeys_by_prefix((*iter));
     }
     int r = db->submit_transaction_sync(dbt);
-    assert(r >= 0);
+    ceph_assert(r >= 0);
   }
 
-  void _open(string kv_type) {
+  void _open(const string& kv_type) {
     string::const_reverse_iterator rit;
     int pos = 0;
     for (rit = path.rbegin(); rit != path.rend(); ++rit, ++pos) {
@@ -599,15 +630,15 @@ class MonitorDBStore
       derr << __func__ << " error initializing "
 	   << kv_type << " db back storage in "
 	   << full_path << dendl;
-      assert(0 == "MonitorDBStore: error initializing keyvaluedb back storage");
+      ceph_abort_msg("MonitorDBStore: error initializing keyvaluedb back storage");
     }
     db.reset(db_ptr);
 
-    if (g_conf->mon_debug_dump_transactions) {
-      if (!g_conf->mon_debug_dump_json) {
+    if (g_conf()->mon_debug_dump_transactions) {
+      if (!g_conf()->mon_debug_dump_json) {
         dump_fd_binary = ::open(
-          g_conf->mon_debug_dump_location.c_str(),
-          O_CREAT|O_APPEND|O_WRONLY, 0644);
+          g_conf()->mon_debug_dump_location.c_str(),
+          O_CREAT|O_APPEND|O_WRONLY|O_CLOEXEC, 0644);
         if (dump_fd_binary < 0) {
           dump_fd_binary = -errno;
           derr << "Could not open log file, got "
@@ -616,12 +647,12 @@ class MonitorDBStore
       } else {
         dump_fmt.reset();
         dump_fmt.open_array_section("dump");
-        dump_fd_json.open(g_conf->mon_debug_dump_location.c_str());
+        dump_fd_json.open(g_conf()->mon_debug_dump_location.c_str());
       }
       do_dump = true;
     }
     if (kv_type == "rocksdb")
-      db->init(g_conf->mon_rocksdb_options);
+      db->init(g_conf()->mon_rocksdb_options);
     else
       db->init();
 
@@ -662,7 +693,7 @@ class MonitorDBStore
     string kv_type;
     int r = read_meta("kv_backend", &kv_type);
     if (r < 0) {
-      kv_type = g_conf->mon_keyvaluedb;
+      kv_type = g_conf()->mon_keyvaluedb;
       r = write_meta("kv_backend", kv_type);
       if (r < 0)
 	return r;
@@ -685,6 +716,10 @@ class MonitorDBStore
 
   void compact() {
     db->compact();
+  }
+
+  void compact_async() {
+    db->compact_async();
   }
 
   void compact_prefix(const string& prefix) {
@@ -714,7 +749,8 @@ class MonitorDBStore
     string v = value;
     v += "\n";
     int r = safe_write_file(path.c_str(), key.c_str(),
-			    v.c_str(), v.length());
+			    v.c_str(), v.length(),
+			    0600);
     if (r < 0)
       return r;
     return 0;
@@ -756,9 +792,9 @@ class MonitorDBStore
       is_open(false) {
   }
   ~MonitorDBStore() {
-    assert(!is_open);
+    ceph_assert(!is_open);
     if (do_dump) {
-      if (!g_conf->mon_debug_dump_json) {
+      if (!g_conf()->mon_debug_dump_json) {
         ::close(dump_fd_binary);
       } else {
         dump_fmt.close_section();

@@ -38,15 +38,15 @@ void PyFormatter::open_object_section(const char *name)
 
 void PyFormatter::dump_unsigned(const char *name, uint64_t u)
 {
-  PyObject *p = PyLong_FromLongLong(u);
-  assert(p);
+  PyObject *p = PyLong_FromUnsignedLong(u);
+  ceph_assert(p);
   dump_pyobject(name, p);
 }
 
 void PyFormatter::dump_int(const char *name, int64_t u)
 {
   PyObject *p = PyLong_FromLongLong(u);
-  assert(p);
+  ceph_assert(p);
   dump_pyobject(name, p);
 }
 
@@ -55,7 +55,7 @@ void PyFormatter::dump_float(const char *name, double d)
   dump_pyobject(name, PyFloat_FromDouble(d));
 }
 
-void PyFormatter::dump_string(const char *name, boost::string_view s)
+void PyFormatter::dump_string(const char *name, std::string_view s)
 {
   dump_pyobject(name, PyString_FromString(s.data()));
 }

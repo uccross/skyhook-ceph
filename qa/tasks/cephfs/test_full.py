@@ -30,21 +30,10 @@ class FullnessTestCase(CephFSTestCase):
     def setUp(self):
         CephFSTestCase.setUp(self)
 
-        # These tests just use a single active MDS throughout, so remember its ID
-        # for use in mds_asok calls
-        self.active_mds_id = self.fs.get_active_names()[0]
+        mds_status = self.fs.rank_asok(["status"])
 
         # Capture the initial OSD map epoch for later use
-        self.initial_osd_epoch = json.loads(
-            self.fs.mon_manager.raw_cluster_cmd("osd", "dump", "--format=json").strip()
-        )['epoch']
-
-        # Check the initial barrier epoch on the MDS: this should be
-        # set to the latest map at MDS startup.  We do this check in
-        # setUp to get in there before subclasses might touch things
-        # in their own setUp functions.
-        self.assertGreaterEqual(self.fs.mds_asok(["status"], mds_id=self.active_mds_id)['osdmap_epoch_barrier'],
-                                self.initial_osd_epoch)
+        self.initial_osd_epoch = mds_status['osdmap_epoch_barrier']
 
     def test_barrier(self):
         """
@@ -91,7 +80,7 @@ class FullnessTestCase(CephFSTestCase):
         self.assertEqual(mount_b_epoch, mount_b_initial_epoch)
 
         # Set a barrier on the MDS
-        self.fs.mds_asok(["osdmap", "barrier", new_epoch.__str__()], mds_id=self.active_mds_id)
+        self.fs.rank_asok(["osdmap", "barrier", new_epoch.__str__()])
 
         # Do an operation on client B, witness that it ends up with
         # the latest OSD map from the barrier.  This shouldn't generate any
@@ -134,7 +123,7 @@ class FullnessTestCase(CephFSTestCase):
                           the failed write.
         """
 
-        osd_mon_report_interval_max = int(self.fs.get_config("osd_mon_report_interval_max", service_type='osd'))
+        osd_mon_report_interval = int(self.fs.get_config("osd_mon_report_interval", service_type='osd'))
 
         log.info("Writing {0}MB should fill this cluster".format(self.fill_mb))
 
@@ -149,7 +138,7 @@ class FullnessTestCase(CephFSTestCase):
         else:
             log.info("Writing file B succeeded (full status will happen soon)")
             self.wait_until_true(lambda: self.is_full(),
-                                 timeout=osd_mon_report_interval_max * 5)
+                                 timeout=osd_mon_report_interval * 5)
 
         # Attempting to write more data should give me ENOSPC
         with self.assertRaises(CommandFailedError) as ar:
@@ -161,7 +150,7 @@ class FullnessTestCase(CephFSTestCase):
         # while in the full state.
         osd_epoch = json.loads(self.fs.mon_manager.raw_cluster_cmd("osd", "dump", "--format=json-pretty"))['epoch']
         self.wait_until_true(
-            lambda: self.fs.mds_asok(['status'], mds_id=self.active_mds_id)['osdmap_epoch'] >= osd_epoch,
+            lambda: self.fs.rank_asok(['status'])['osdmap_epoch'] >= osd_epoch,
             timeout=10)
 
         if not self.data_only:
@@ -184,13 +173,13 @@ class FullnessTestCase(CephFSTestCase):
         # * The MDS to purge the stray folder and execute object deletions
         #  * The OSDs to inform the mon that they are no longer full
         self.wait_until_true(lambda: not self.is_full(),
-                             timeout=osd_mon_report_interval_max * 5)
+                             timeout=osd_mon_report_interval * 5)
 
         # Wait for the MDS to see the latest OSD map so that it will reliably
         # be applying the free space policy
         osd_epoch = json.loads(self.fs.mon_manager.raw_cluster_cmd("osd", "dump", "--format=json-pretty"))['epoch']
         self.wait_until_true(
-            lambda: self.fs.mds_asok(['status'], mds_id=self.active_mds_id)['osdmap_epoch'] >= osd_epoch,
+            lambda: self.fs.rank_asok(['status'])['osdmap_epoch'] >= osd_epoch,
             timeout=10)
 
         # Now I should be able to write again
@@ -212,7 +201,7 @@ class FullnessTestCase(CephFSTestCase):
         file_path = os.path.join(self.mount_a.mountpoint, "full_test_file")
 
         # Enough to trip the full flag
-        osd_mon_report_interval_max = int(self.fs.get_config("osd_mon_report_interval_max", service_type='osd'))
+        osd_mon_report_interval = int(self.fs.get_config("osd_mon_report_interval", service_type='osd'))
         mon_tick_interval = int(self.fs.get_config("mon_tick_interval", service_type="mon"))
 
         # Sufficient data to cause RADOS cluster to go 'full'
@@ -222,13 +211,13 @@ class FullnessTestCase(CephFSTestCase):
         # (report_interval for mon to learn PG stats, tick interval for it to update OSD map,
         #  factor of 1.5 for I/O + network latency in committing OSD map and distributing it
         #  to the OSDs)
-        full_wait = (osd_mon_report_interval_max + mon_tick_interval) * 1.5
+        full_wait = (osd_mon_report_interval + mon_tick_interval) * 1.5
 
         # Configs for this test should bring this setting down in order to
         # run reasonably quickly
-        if osd_mon_report_interval_max > 10:
+        if osd_mon_report_interval > 10:
             log.warn("This test may run rather slowly unless you decrease"
-                     "osd_mon_report_interval_max (5 is a good setting)!")
+                     "osd_mon_report_interval (5 is a good setting)!")
 
         self.mount_a.run_python(template.format(
             fill_mb=self.fill_mb,

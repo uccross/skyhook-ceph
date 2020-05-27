@@ -15,7 +15,9 @@
 #ifndef CEPH_COMMON_OUTPUTDATASOCKET_H
 #define CEPH_COMMON_OUTPUTDATASOCKET_H
 
-#include "common/Cond.h"
+#include "common/ceph_mutex.h"
+#include "common/Thread.h"
+#include "include/buffer.h"
 
 class CephContext;
 
@@ -53,13 +55,13 @@ protected:
   bool going_down;
 
   uint64_t data_size;
+  uint32_t skipped;
 
-  std::list<bufferlist> data;
+  std::vector<buffer::list> data;
 
-  Mutex m_lock;
-  Cond cond;
-
-  bufferlist delim;
+  ceph::mutex m_lock = ceph::make_mutex("OutputDataSocket::m_lock");
+  ceph::condition_variable cond;
+  buffer::list delim;
 };
 
 #endif

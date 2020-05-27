@@ -20,6 +20,7 @@ def task(ctx, config):
            bucket-name: 's3atest' (default)
            access-key: 'anykey' (uses a default value)
            secret-key: 'secretkey' ( uses a default value)
+           role: client.0
     """
     if config is None:
         config = {}
@@ -27,12 +28,17 @@ def task(ctx, config):
     assert isinstance(config, dict), \
         "task only supports a dictionary for configuration"
 
+    assert hasattr(ctx, 'rgw'), 's3a-hadoop must run after the rgw task'
+
     overrides = ctx.config.get('overrides', {})
     misc.deep_merge(config, overrides.get('s3a-hadoop', {}))
     testdir = misc.get_testdir(ctx)
-    rgws = ctx.cluster.only(misc.is_type('rgw'))
-    # use the first rgw node to test s3a
-    rgw_node = rgws.remotes.keys()[0]
+
+    role = config.get('role')
+    (remote,) = ctx.cluster.only(role).remotes.keys()
+    endpoint = ctx.rgw.role_endpoints.get(role)
+    assert endpoint, 's3tests: no rgw endpoint for {}'.format(role)
+
     # get versions
     maven_major = config.get('maven-major', 'maven-3')
     maven_version = config.get('maven-version', '3.3.9')
@@ -46,12 +52,12 @@ def task(ctx, config):
     # set versions for cloning the repo
     apache_maven = 'apache-maven-{maven_version}-bin.tar.gz'.format(
         maven_version=maven_version)
-    maven_link = 'http://mirror.jax.hugeserver.com/apache/maven/' + \
+    maven_link = 'http://apache.mirrors.lucidnetworks.net/maven/' + \
         '{maven_major}/{maven_version}/binaries/'.format(maven_major=maven_major, maven_version=maven_version) + apache_maven
     hadoop_git = 'https://github.com/apache/hadoop'
     hadoop_rel = 'hadoop-{ver} rel/release-{ver}'.format(ver=hadoop_ver)
-    install_prereq(rgw_node)
-    rgw_node.run(
+    install_prereq(remote)
+    remote.run(
         args=[
             'cd',
             testdir,
@@ -76,28 +82,23 @@ def task(ctx, config):
             run.Raw(hadoop_rel)
         ]
     )
-    dnsmasq_name = 's3.ceph.com'
-    configure_s3a(rgw_node, dnsmasq_name, access_key, secret_key, bucket_name, testdir)
-    setup_dnsmasq(rgw_node, dnsmasq_name)
-    fix_rgw_config(rgw_node, dnsmasq_name)
-    setup_user_bucket(rgw_node, dnsmasq_name, access_key, secret_key, bucket_name, testdir)
+    configure_s3a(remote, endpoint.dns_name, access_key, secret_key, bucket_name, testdir)
+    setup_user_bucket(remote, endpoint.dns_name, access_key, secret_key, bucket_name, testdir)
     if hadoop_ver.startswith('2.8'):
         # test all ITtests but skip AWS test using public bucket landsat-pds
         # which is not available from within this test
-        test_options = '-Dit.test=ITestS3A* -Dit.test=\!ITestS3AAWSCredentialsProvider* -Dparallel-tests -Dscale -Dfs.s3a.scale.test.huge.filesize=128M verify'
+        test_options = '-Dit.test=ITestS3A* -Dparallel-tests -Dscale \
+                        -Dfs.s3a.scale.test.timeout=1200 \
+                        -Dfs.s3a.scale.test.huge.filesize=256M verify'
     else:
         test_options = 'test -Dtest=S3a*,TestS3A*'
     try:
-        run_s3atest(rgw_node, maven_version, testdir, test_options)
+        run_s3atest(remote, maven_version, testdir, test_options)
         yield
     finally:
         log.info("Done s3a testing, Cleaning up")
         for fil in ['apache*', 'hadoop*', 'venv*', 'create*']:
-            rgw_node.run(args=['rm', run.Raw('-rf'), run.Raw('{tdir}/{file}'.format(tdir=testdir, file=fil))])
-        # restart and let NM restore original config
-        rgw_node.run(args=['sudo', 'systemctl', 'stop', 'dnsmasq'])
-        rgw_node.run(args=['sudo', 'systemctl', 'restart', 'network.service'], check_status=False)
-        rgw_node.run(args=['sudo', 'systemctl', 'status', 'network.service'], check_status=False)
+            remote.run(args=['rm', run.Raw('-rf'), run.Raw('{tdir}/{file}'.format(tdir=testdir, file=fil))])
 
 
 def install_prereq(client):
@@ -258,10 +259,15 @@ def run_s3atest(client, maven_version, testdir, test_options):
     """
     aws_testdir = '{testdir}/hadoop/hadoop-tools/hadoop-aws/'.format(testdir=testdir)
     run_test = '{testdir}/apache-maven-{maven_version}/bin/mvn'.format(testdir=testdir, maven_version=maven_version)
+    # Remove AWS CredentialsProvider tests as it hits public bucket from AWS
+    # better solution is to create the public bucket on local server and test
+    rm_test = 'rm src/test/java/org/apache/hadoop/fs/s3a/ITestS3AAWSCredentialsProvider.java'
     client.run(
         args=[
             'cd',
             run.Raw(aws_testdir),
+            run.Raw('&&'),
+            run.Raw(rm_test),
             run.Raw('&&'),
             run.Raw(run_test),
             run.Raw(test_options)
@@ -278,6 +284,11 @@ def configure_s3a(client, dns_name, access_key, secret_key, bucket_name, testdir
 <property>
 <name>fs.s3a.endpoint</name>
 <value>{name}</value>
+</property>
+
+<property>
+<name>fs.contract.test.fs.s3a</name>
+<value>s3a://{bucket_name}/</value>
 </property>
 
 <property>

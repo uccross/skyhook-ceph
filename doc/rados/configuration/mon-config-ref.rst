@@ -212,10 +212,8 @@ these under ``[mon]`` or under the entry for a specific monitor.
 
 .. code-block:: ini
 
-	[mon]
-		mon host = hostname1,hostname2,hostname3
-		mon addr = 10.0.0.10:6789,10.0.0.11:6789,10.0.0.12:6789
-
+	[global]
+		mon host = 10.0.0.2,10.0.0.3,10.0.0.4
 
 .. code-block:: ini
 
@@ -348,8 +346,8 @@ by setting it in the ``[mon]`` section of the configuration file.
 ``mon warn on cache pools without hit sets``
 
 :Description: Issue a ``HEALTH_WARN`` in cluster log if a cache pool does not
-              have the hitset type set set.
-              See `hit set type <../operations/pools#hit-set-type>`_ for more
+              have the ``hit_set_type`` value configured.
+              See :ref:`hit_set_type <hit_set_type>` for more
               details.
 :Type: Boolean
 :Default: True
@@ -359,7 +357,7 @@ by setting it in the ``[mon]`` section of the configuration file.
 
 :Description: Issue a ``HEALTH_WARN`` in cluster log if the CRUSH's
               ``straw_calc_version`` is zero. See
-              `CRUSH map tunables <../operations/crush-map#tunables>`_ for
+              :ref:`CRUSH map tunables <crush-map-tunables>` for
               details.
 :Type: Boolean
 :Default: True
@@ -377,7 +375,7 @@ by setting it in the ``[mon]`` section of the configuration file.
 
 :Description: The minimum tunable profile version required by the cluster.
               See
-              `CRUSH map tunables <../operations/crush-map#tunables>`_ for
+              :ref:`CRUSH map tunables <crush-map-tunables>` for
               details.
 :Type: String
 :Default: ``firefly``
@@ -388,11 +386,38 @@ by setting it in the ``[mon]`` section of the configuration file.
 :Description: Issue a ``HEALTH_WARN`` in cluster log if
               ``mon osd down out interval`` is zero. Having this option set to
               zero on the leader acts much like the ``noout`` flag. It's hard
-              to figure out what's going wrong with clusters witout the
+              to figure out what's going wrong with clusters without the
               ``noout`` flag set but acting like that just the same, so we
               report a warning in this case.
 :Type: Boolean
 :Default: True
+
+
+``mon warn on slow ping ratio``
+
+:Description: Issue a ``HEALTH_WARN`` in cluster log if any heartbeat
+              between OSDs exceeds ``mon warn on slow ping ratio``
+              of ``osd heartbeat grace``.  The default is 5%.
+:Type: Float
+:Default: ``0.05``
+
+
+``mon warn on slow ping time``
+
+:Description: Override ``mon warn on slow ping ratio`` with a specific value.
+              Issue a ``HEALTH_WARN`` in cluster log if any heartbeat
+              between OSDs exceeds ``mon warn on slow ping time``
+              milliseconds.  The default is 0 (disabled).
+:Type: Integer
+:Default: ``0``
+
+
+``mon warn on pool no redundancy``
+
+:Description: Issue a ``HEALTH_WARN`` in cluster log if any pool is
+              configured with no replicas.
+:Type: Boolean
+:Default: ``True``
 
 
 ``mon cache target full warn ratio``
@@ -424,8 +449,8 @@ by setting it in the ``[mon]`` section of the configuration file.
               log (a non-positive number disables it). If current health summary
               is empty or identical to the last time, monitor will not send it
               to cluster log.
-:Type: Integer
-:Default: 3600
+:Type: Float
+:Default: 60.000000
 
 
 ``mon health to clog interval``
@@ -435,7 +460,7 @@ by setting it in the ``[mon]`` section of the configuration file.
               send the summary to cluster log no matter if the summary changes
               or not.
 :Type: Integer
-:Default: 60
+:Default: 3600
 
 
 
@@ -520,6 +545,9 @@ you expect to fail to arrive at a reasonable full ratio. Repeat the foregoing
 process with a higher number of OSD failures (e.g., a rack of OSDs) to arrive at
 a reasonable number for a near full ratio.
 
+The following settings only apply on cluster creation and are then stored in
+the OSDMap.
+
 .. code-block:: ini
 
 	[global]
@@ -558,6 +586,10 @@ a reasonable number for a near full ratio.
 
 .. tip:: If some OSDs are nearfull, but others have plenty of capacity, you 
          may have a problem with the CRUSH weight for the nearfull OSDs.
+
+.. tip:: These settings only apply during cluster creation. Afterwards they need
+         to be changed in the OSDMap using ``ceph osd set-nearfull-ratio`` and
+         ``ceph osd set-full-ratio``
 
 .. index:: heartbeat
 
@@ -675,7 +707,7 @@ Trimming requires that the placement groups are ``active + clean``.
               message from its sync provider before it gives up and bootstrap
               again.
 :Type: Double
-:Default: ``30.0``
+:Default: ``60.0``
 
 
 ``mon sync max retries``
@@ -983,6 +1015,14 @@ Monitors can also disallow removal of pools if configured that way.
 :Type: Boolean
 :Default: ``false``
 
+``osd pool default ec fast read``
+
+:Description: Whether to turn on fast read on the pool or not. It will be used as
+              the default setting of newly created erasure coded pools if ``fast_read``
+              is not specified at create time.
+:Type: Boolean
+:Default: ``false``
+
 ``osd pool default flag hashpspool``
 
 :Description: Set the hashpspool flag on new pools
@@ -1032,7 +1072,7 @@ Miscellaneous
               and log information.
 
 :Type: Double
-:Default: ``300`` 
+:Default: ``86400`` 
 
 
 ``mon stat smooth intervals``
@@ -1092,15 +1132,6 @@ Miscellaneous
 ``mon osd allow primary affinity``
 
 :Description: allow ``primary_affinity`` to be set in the osdmap.
-:Type: Boolean
-:Default: False
-
-
-``mon osd pool ec fast read``
-
-:Description: Whether turn on fast read on the pool or not. It will be used as
-              the default setting of newly created erasure pools if ``fast_read``
-              is not specified at create time.
 :Type: Boolean
 :Default: False
 
@@ -1185,17 +1216,6 @@ Miscellaneous
 :Type: Integer
 :Default: 4096
 
-
-``mon osd max split count``
-
-:Description: Largest number of PGs per "involved" OSD to let split create.
-              When we increase the ``pg_num`` of a pool, the placement groups
-              will be splitted on all OSDs serving that pool. We want to avoid
-              extreme multipliers on PG splits.
-:Type: Integer
-:Default: 300
-
-
 ``mon session timeout``
 
 :Description: Monitor will terminate inactive sessions stay idle over this
@@ -1203,14 +1223,34 @@ Miscellaneous
 :Type: Integer
 :Default: 300
 
+``mon osd cache size min``
+
+:Description: The minimum amount of bytes to be kept mapped in memory for osd
+               monitor caches.
+:Type: 64-bit Integer
+:Default: 134217728
+
+``mon memory target``
+
+:Description: The amount of bytes pertaining to osd monitor caches and kv cache
+              to be kept mapped in memory with cache auto-tuning enabled.
+:Type: 64-bit Integer
+:Default: 2147483648
+
+``mon memory autotune``
+
+:Description: Autotune the cache memory being used for osd monitors and kv
+              database.
+:Type: Boolean
+:Default: True
 
 
-.. _Paxos: http://en.wikipedia.org/wiki/Paxos_(computer_science)
+.. _Paxos: https://en.wikipedia.org/wiki/Paxos_(computer_science)
 .. _Monitor Keyrings: ../../../dev/mon-bootstrap#secret-keys
 .. _Ceph configuration file: ../ceph-conf/#monitors
 .. _Network Configuration Reference: ../network-config-ref
 .. _Monitor lookup through DNS: ../mon-lookup-dns
-.. _ACID: http://en.wikipedia.org/wiki/ACID
+.. _ACID: https://en.wikipedia.org/wiki/ACID
 .. _Adding/Removing a Monitor: ../../operations/add-or-rm-mons
 .. _Add/Remove a Monitor (ceph-deploy): ../../deployment/ceph-deploy-mon
 .. _Monitoring a Cluster: ../../operations/monitoring

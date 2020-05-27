@@ -6,8 +6,8 @@ To implement the Ceph iSCSI gateway there are a few requirements. It is recommen
 to use two to four iSCSI gateway nodes for a highly available Ceph iSCSI gateway
 solution.
 
-For hardware recommendations, see the `Hardware Recommendation page <http://docs.ceph.com/docs/master/start/hardware-recommendations/>`_
-for more details.
+For hardware recommendations, see :ref:`hardware-recommendations` for more
+details.
 
 .. note::
     On the iSCSI gateway nodes, the memory footprint of the RBD images
@@ -28,12 +28,12 @@ cluster::
 
    ::
 
-       ceph tell <daemon_type>.<id> injectargs '--<parameter_name> <new_value>'
+       ceph tell <daemon_type>.<id> config set <parameter_name> <new_value>
 
    ::
 
-       ceph tell osd.0 injectargs '--osd_heartbeat_grace 20'
-       ceph tell osd.0 injectargs '--osd_heartbeat_interval 5'
+       ceph tell osd.0 config set osd_heartbeat_grace 20
+       ceph tell osd.0 config set osd_heartbeat_interval 5
 
 -  Online Updating on the OSD Node
 
@@ -46,4 +46,5 @@ cluster::
        ceph daemon osd.0 config set osd_heartbeat_grace 20
        ceph daemon osd.0 config set osd_heartbeat_interval 5
 
-For more details on setting Ceph's configuration options, see the `Configuration page <http://docs.ceph.com/docs/master/rados/configuration/>`_.
+For more details on setting Ceph's configuration options, see
+:ref:`configuring-ceph`.

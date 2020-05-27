@@ -8,22 +8,25 @@ import os
 from StringIO import StringIO
 from teuthology.orchestra import run
 from teuthology.orchestra.run import CommandFailedError, ConnectionLostError
+from tasks.cephfs.filesystem import Filesystem
 
 log = logging.getLogger(__name__)
 
 
 class CephFSMount(object):
-    def __init__(self, test_dir, client_id, client_remote):
+    def __init__(self, ctx, test_dir, client_id, client_remote):
         """
         :param test_dir: Global teuthology test dir
         :param client_id: Client ID, the 'foo' in client.foo
         :param client_remote: Remote instance for the host where client will run
         """
 
+        self.ctx = ctx
         self.test_dir = test_dir
         self.client_id = client_id
         self.client_remote = client_remote
         self.mountpoint_dir_name = 'mnt.{id}'.format(id=self.client_id)
+        self.fs = None
 
         self.test_files = ['a', 'b', 'c']
 
@@ -36,6 +39,15 @@ class CephFSMount(object):
 
     def is_mounted(self):
         raise NotImplementedError()
+
+    def setupfs(self, name=None):
+        if name is None and self.fs is not None:
+            # Previous mount existed, reuse the old name
+            name = self.fs.name
+        self.fs = Filesystem(self.ctx, name=name)
+        log.info('Wait for MDS to reach steady state...')
+        self.fs.wait_for_daemons()
+        log.info('Ready to start {}...'.format(type(self).__name__))
 
     def mount(self, mount_path=None, mount_fs_name=None):
         raise NotImplementedError()
@@ -91,6 +103,14 @@ class CephFSMount(object):
         finally:
             self.umount_wait()
 
+    def is_blacklisted(self):
+        addr = self.get_global_addr()
+        blacklist = json.loads(self.fs.mon_manager.raw_cluster_cmd("osd", "blacklist", "ls", "--format=json"))
+        for b in blacklist:
+            if addr == b["addr"]:
+                return True
+        return False
+
     def create_files(self):
         assert(self.is_mounted())
 
@@ -124,20 +144,23 @@ class CephFSMount(object):
             'sudo', 'rm', '-f', os.path.join(self.mountpoint, filename)
         ])
 
-    def _run_python(self, pyscript):
-        return self.client_remote.run(args=[
-            'sudo', 'adjust-ulimits', 'daemon-helper', 'kill', 'python', '-c', pyscript
-        ], wait=False, stdin=run.PIPE, stdout=StringIO())
+    def _run_python(self, pyscript, py_version='python'):
+        return self.client_remote.run(
+               args=['sudo', 'adjust-ulimits', 'daemon-helper', 'kill',
+                     py_version, '-c', pyscript], wait=False, stdin=run.PIPE,
+               stdout=StringIO())
 
-    def run_python(self, pyscript):
-        p = self._run_python(pyscript)
+    def run_python(self, pyscript, py_version='python'):
+        p = self._run_python(pyscript, py_version)
         p.wait()
         return p.stdout.getvalue().strip()
 
-    def run_shell(self, args, wait=True):
+    def run_shell(self, args, wait=True, check_status=True, omit_sudo=True):
         args = ["cd", self.mountpoint, run.Raw('&&'), "sudo"] + args
         return self.client_remote.run(args=args, stdout=StringIO(),
-                                      stderr=StringIO(), wait=wait)
+                                      stderr=StringIO(), wait=wait,
+                                      check_status=check_status,
+                                      omit_sudo=omit_sudo)
 
     def open_no_data(self, basename):
         """
@@ -154,7 +177,7 @@ class CephFSMount(object):
         ))
         p.wait()
 
-    def open_background(self, basename="background_file"):
+    def open_background(self, basename="background_file", write=True):
         """
         Open a file for writing, then block such that the client
         will hold a capability.
@@ -166,16 +189,25 @@ class CephFSMount(object):
 
         path = os.path.join(self.mountpoint, basename)
 
-        pyscript = dedent("""
-            import time
+        if write:
+            pyscript = dedent("""
+                import time
 
-            f = open("{path}", 'w')
-            f.write('content')
-            f.flush()
-            f.write('content2')
-            while True:
-                time.sleep(1)
-            """).format(path=path)
+                f = open("{path}", 'w')
+                f.write('content')
+                f.flush()
+                f.write('content2')
+                while True:
+                    time.sleep(1)
+                """).format(path=path)
+        else:
+            pyscript = dedent("""
+                import time
+
+                f = open("{path}", 'r')
+                while True:
+                    time.sleep(1)
+                """).format(path=path)
 
         rproc = self._run_python(pyscript)
         self.background_procs.append(rproc)
@@ -186,6 +218,22 @@ class CephFSMount(object):
         self.wait_for_visible(basename)
 
         return rproc
+
+    def wait_for_dir_empty(self, dirname, timeout=30):
+        i = 0
+        dirpath = os.path.join(self.mountpoint, dirname)
+        while i < timeout:
+            nr_entries = int(self.getfattr(dirpath, "ceph.dir.entries"))
+            if nr_entries == 0:
+                log.debug("Directory {0} seen empty from {1} after {2}s ".format(
+                    dirname, self.client_id, i))
+                return
+            else:
+                time.sleep(1)
+                i += 1
+
+        raise RuntimeError("Timed out after {0}s waiting for {1} to become empty from {2}".format(
+            i, dirname, self.client_id))
 
     def wait_for_visible(self, basename="background_file", timeout=30):
         i = 0
@@ -456,7 +504,21 @@ class CephFSMount(object):
         self._kill_background(p)
         self.background_procs.remove(p)
 
+    def send_signal(self, signal):
+        signal = signal.lower()
+        if signal.lower() not in ['sigstop', 'sigcont', 'sigterm', 'sigkill']:
+            raise NotImplementedError
+
+        self.client_remote.run(args=['sudo', 'kill', '-{0}'.format(signal),
+                                self.client_pid], omit_sudo=False)
+
     def get_global_id(self):
+        raise NotImplementedError()
+
+    def get_global_inst(self):
+        raise NotImplementedError()
+
+    def get_global_addr(self):
         raise NotImplementedError()
 
     def get_osd_epoch(self):

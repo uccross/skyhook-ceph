@@ -1,12 +1,14 @@
+.. _mgr-prometheus:
+
 =================
-Prometheus plugin
+Prometheus Module
 =================
 
 Provides a Prometheus exporter to pass on Ceph performance counters
 from the collection point in ceph-mgr.  Ceph-mgr receives MMgrReport
 messages from all MgrClient processes (mons and OSDs, for instance)
 with performance counter schema data and actual counter data, and keeps
-a circular buffer of the last N samples.  This plugin creates an HTTP
+a circular buffer of the last N samples.  This module creates an HTTP
 endpoint (like all Prometheus exporters) and retrieves the latest sample
 of every counter when polled (or "scraped" in Prometheus terminology).
 The HTTP path and query parameters are ignored; all extant counters
@@ -29,6 +31,23 @@ configurable with ``ceph config-key set``, with keys
 ``mgr/prometheus/server_addr`` and ``mgr/prometheus/server_port``.
 This port is registered with Prometheus's `registry <https://github.com/prometheus/prometheus/wiki/Default-port-allocations>`_.
 
+RBD IO statistics
+-----------------
+
+The module can optionally collect RBD per-image IO statistics by enabling
+dynamic OSD performance counters. The statistics are gathered for all images
+in the pools that are specified in the ``mgr/prometheus/rbd_stats_pools``
+configuration parameter. The parameter is a comma or space separated list
+of ``pool[/namespace]`` entries. If the namespace is not specified the
+statistics are collected for all namespaces in the pool.
+
+The module makes the list of all available images scanning the specified
+pools and namespaces and refreshes it periodically. The period is
+configurable via the ``mgr/prometheus/rbd_stats_pools_refresh_interval``
+parameter (in sec) and is 300 sec (5 minutes) by default. The module will
+force refresh earlier if it detects statistics from a previously unknown
+RBD image.
+
 Statistic names and labels
 ==========================
 
@@ -48,6 +67,12 @@ rocksdb stats.
 The *cluster* statistics (i.e. those global to the Ceph cluster)
 have labels appropriate to what they report on.  For example, 
 metrics relating to pools have a ``pool_id`` label.
+
+
+The long running averages that represent the histograms from core Ceph
+are represented by a pair of ``<name>_sum`` and ``<name>_count`` metrics.
+This is similar to how histograms are represented in `Prometheus <https://prometheus.io/docs/concepts/metric_types/#histogram>`_
+and they can also be treated `similarly <https://prometheus.io/docs/practices/histograms/>`_.
 
 Pool and OSD metadata series
 ----------------------------
@@ -123,16 +148,20 @@ Configuring Prometheus server
 honor_labels
 ------------
 
-To enable Ceph to output properly-labelled data relating to any host,
+To enable Ceph to output properly-labeled data relating to any host,
 use the ``honor_labels`` setting when adding the ceph-mgr endpoints
 to your prometheus configuration.
 
 This allows Ceph to export the proper ``instance`` label without prometheus
 overwriting it. Without this setting, Prometheus applies an ``instance`` label
-that includes the hostname and port of the endpoint that the series game from.
+that includes the hostname and port of the endpoint that the series came from.
 Because Ceph clusters have multiple manager daemons, this results in an
 ``instance`` label that changes spuriously when the active manager daemon
 changes.
+
+If this is undesirable a custom ``instance`` label can be set in the
+Prometheus target configuration: you might wish to set it to the hostname
+of your first mgr daemon, or something completely arbitrary like "ceph_cluster".
 
 node_exporter hostname labels
 -----------------------------
@@ -211,6 +240,11 @@ Counters and gauges are exported; currently histograms and long-running
 averages are not.  It's possible that Ceph's 2-D histograms could be 
 reduced to two separate 1-D histograms, and that long-running averages
 could be exported as Prometheus' Summary type.
+
+The names of the stats are exactly as Ceph names them, with
+illegal characters ``.`` and ``-`` translated to ``_``.  There is one
+label applied, ``daemon``, and its value is the daemon.id for the
+daemon in question (e.g. ``{daemon=mon.hosta}`` or ``{daemon=osd.11}``).
 
 Timestamps, as with many Prometheus exporters, are established by
 the server's scrape time (Prometheus expects that it is polling the

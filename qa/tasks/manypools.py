@@ -39,7 +39,7 @@ def task(ctx, config):
     log.info('got client_roles={client_roles_}'.format(client_roles_=client_roles))
     for role in client_roles:
         log.info('role={role_}'.format(role_=role))
-        (creator_remote, ) = ctx.cluster.only('client.{id}'.format(id=role)).remotes.iterkeys()
+        (creator_remote, ) = ctx.cluster.only('client.{id}'.format(id=role)).remotes.keys()
         creator_remotes.append((creator_remote, 'client.{id}'.format(id=role)))
 
     remaining_pools = poolnum
@@ -54,9 +54,9 @@ def task(ctx, config):
             log.info('creating pool{num} on {role}'.format(num=poolnum, role=role_))
 	    proc = remote.run(
 	        args=[
-		    'rados',
+		    'ceph',
 		    '--name', role_,
-		    'mkpool', 'pool{num}'.format(num=poolnum), '-1',
+		    'osd', 'pool', 'create', 'pool{num}'.format(num=poolnum), '8',
 		    run.Raw('&&'),
 		    'rados',
 		    '--name', role_,

@@ -7,7 +7,7 @@
 #include "common/RefCountedObj.h"
 #include "common/entity_name.h"
 #include "msg/msg_types.h"
-#include "mon/MonCap.h"
+#include "MgrCap.h"
 
 
 /**
@@ -20,13 +20,16 @@ struct MgrSession : public RefCountedObject {
 
   int osd_id = -1;  ///< osd id (if an osd)
 
-  // mon caps are suitably generic for mgr
-  MonCap caps;
+  MgrCap caps;
 
   std::set<std::string> declared_types;
 
-  MgrSession(CephContext *cct) : RefCountedObject(cct, 0) {}
+  explicit MgrSession(CephContext *cct) : RefCountedObject(cct, 0) {}
   ~MgrSession() override {}
+
+  const entity_addr_t& get_peer_addr() const {
+    return inst.addr;
+  }
 };
 
 typedef boost::intrusive_ptr<MgrSession> MgrSessionRef;

@@ -9,23 +9,27 @@
 
 void ServiceMap::Daemon::encode(bufferlist& bl, uint64_t features) const
 {
-  ENCODE_START(1, 1, bl);
-  ::encode(gid, bl);
-  ::encode(addr, bl, features);
-  ::encode(start_epoch, bl);
-  ::encode(start_stamp, bl);
-  ::encode(metadata, bl);
+  ENCODE_START(2, 1, bl);
+  encode(gid, bl);
+  encode(addr, bl, features);
+  encode(start_epoch, bl);
+  encode(start_stamp, bl);
+  encode(metadata, bl);
+  encode(task_status, bl);
   ENCODE_FINISH(bl);
 }
 
-void ServiceMap::Daemon::decode(bufferlist::iterator& p)
+void ServiceMap::Daemon::decode(bufferlist::const_iterator& p)
 {
-  DECODE_START(1, p);
-  ::decode(gid, p);
-  ::decode(addr, p);
-  ::decode(start_epoch, p);
-  ::decode(start_stamp, p);
-  ::decode(metadata, p);
+  DECODE_START(2, p);
+  decode(gid, p);
+  decode(addr, p);
+  decode(start_epoch, p);
+  decode(start_stamp, p);
+  decode(metadata, p);
+  if (struct_v >= 2) {
+    decode(task_status, p);
+  }
   DECODE_FINISH(p);
 }
 
@@ -34,9 +38,14 @@ void ServiceMap::Daemon::dump(Formatter *f) const
   f->dump_unsigned("start_epoch", start_epoch);
   f->dump_stream("start_stamp") << start_stamp;
   f->dump_unsigned("gid", gid);
-  f->dump_stream("addr") << addr;
+  f->dump_string("addr", addr.get_legacy_str());
   f->open_object_section("metadata");
   for (auto& p : metadata) {
+    f->dump_string(p.first.c_str(), p.second);
+  }
+  f->close_section();
+  f->open_object_section("task_status");
+  for (auto& p : task_status) {
     f->dump_string(p.first.c_str(), p.second);
   }
   f->close_section();
@@ -48,6 +57,7 @@ void ServiceMap::Daemon::generate_test_instances(std::list<Daemon*>& ls)
   ls.push_back(new Daemon);
   ls.back()->gid = 222;
   ls.back()->metadata["this"] = "that";
+  ls.back()->task_status["task1"] = "running";
 }
 
 // Service
@@ -55,16 +65,16 @@ void ServiceMap::Daemon::generate_test_instances(std::list<Daemon*>& ls)
 void ServiceMap::Service::encode(bufferlist& bl, uint64_t features) const
 {
   ENCODE_START(1, 1, bl);
-  ::encode(daemons, bl, features);
-  ::encode(summary, bl);
+  encode(daemons, bl, features);
+  encode(summary, bl);
   ENCODE_FINISH(bl);
 }
 
-void ServiceMap::Service::decode(bufferlist::iterator& p)
+void ServiceMap::Service::decode(bufferlist::const_iterator& p)
 {
   DECODE_START(1, p);
-  ::decode(daemons, p);
-  ::decode(summary, p);
+  decode(daemons, p);
+  decode(summary, p);
   DECODE_FINISH(p);
 }
 
@@ -91,18 +101,18 @@ void ServiceMap::Service::generate_test_instances(std::list<Service*>& ls)
 void ServiceMap::encode(bufferlist& bl, uint64_t features) const
 {
   ENCODE_START(1, 1, bl);
-  ::encode(epoch, bl);
-  ::encode(modified, bl);
-  ::encode(services, bl, features);
+  encode(epoch, bl);
+  encode(modified, bl);
+  encode(services, bl, features);
   ENCODE_FINISH(bl);
 }
 
-void ServiceMap::decode(bufferlist::iterator& p)
+void ServiceMap::decode(bufferlist::const_iterator& p)
 {
   DECODE_START(1, p);
-  ::decode(epoch, p);
-  ::decode(modified, p);
-  ::decode(services, p);
+  decode(epoch, p);
+  decode(modified, p);
+  decode(services, p);
   DECODE_FINISH(p);
 }
 

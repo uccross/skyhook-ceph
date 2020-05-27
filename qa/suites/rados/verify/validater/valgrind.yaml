@@ -10,8 +10,11 @@ overrides:
     conf:
       global:
         osd heartbeat grace: 40
+        debug refs: 5
       mon:
         mon osd crush smoke test: false
+      osd:
+        osd fast shutdown: false
     log-whitelist:
       - overall HEALTH_
 # valgrind is slow.. we might get PGs stuck peering etc
@@ -20,3 +23,5 @@ overrides:
       mon: [--tool=memcheck, --leak-check=full, --show-reachable=yes]
       osd: [--tool=memcheck]
       mds: [--tool=memcheck]
+# https://tracker.ceph.com/issues/38621
+#      mgr: [--tool=memcheck]

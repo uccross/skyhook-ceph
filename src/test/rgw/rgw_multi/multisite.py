@@ -1,8 +1,9 @@
 from abc import ABCMeta, abstractmethod
-from cStringIO import StringIO
+from six import StringIO
+
 import json
 
-from conn import get_gateway_connection
+from .conn import get_gateway_connection, get_gateway_secure_connection
 
 class Cluster:
     """ interface to run commands against a distinct ceph cluster """
@@ -17,13 +18,14 @@ class Gateway:
     """ interface to control a single radosgw instance """
     __metaclass__ = ABCMeta
 
-    def __init__(self, host = None, port = None, cluster = None, zone = None, proto = 'http', connection = None):
+    def __init__(self, host = None, port = None, cluster = None, zone = None, ssl_port = 0):
         self.host = host
         self.port = port
         self.cluster = cluster
         self.zone = zone
-        self.proto = proto
-        self.connection = connection
+        self.connection = None
+        self.secure_connection = None
+        self.ssl_port = ssl_port
 
     @abstractmethod
     def start(self, args = []):
@@ -36,7 +38,7 @@ class Gateway:
         pass
 
     def endpoint(self):
-        return '%s://%s:%d' % (self.proto, self.host, self.port)
+        return 'http://%s:%d' % (self.host, self.port)
 
 class SystemObject:
     """ interface for system objects, represented in json format and
@@ -180,6 +182,7 @@ class ZoneConn(object):
 
         if self.zone.gateways is not None:
             self.conn = get_gateway_connection(self.zone.gateways[0], self.credentials)
+            self.secure_conn = get_gateway_secure_connection(self.zone.gateways[0], self.credentials)
 
     def get_connection(self):
         return self.conn
@@ -343,14 +346,18 @@ class Credentials:
         return ['--access-key', self.access_key, '--secret', self.secret]
 
 class User(SystemObject):
-    def __init__(self, uid, data = None, name = None, credentials = None):
+    def __init__(self, uid, data = None, name = None, credentials = None, tenant = None):
         self.name = name
         self.credentials = credentials or []
+        self.tenant = tenant
         super(User, self).__init__(data, uid)
 
     def user_arg(self):
         """ command-line argument to specify this user """
-        return ['--uid', self.id]
+        args = ['--uid', self.id]
+        if self.tenant:
+            args += ['--tenant', self.tenant]
+        return args
 
     def build_command(self, command):
         """ build a command line for the given command and args """

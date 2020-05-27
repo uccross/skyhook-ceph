@@ -1,18 +1,21 @@
+// -*- mode:C++; tab-width:8; c-basic-offset:2; indent-tabs-mode:t -*-
+// vim: ts=8 sw=2 smarttab
+
 #ifndef CEPH_RGW_DATA_SYNC_H
 #define CEPH_RGW_DATA_SYNC_H
+
+#include "include/encoding.h"
+
+#include "common/RWLock.h"
+#include "common/ceph_json.h"
+
 
 #include "rgw_coroutine.h"
 #include "rgw_http_client.h"
 #include "rgw_bucket.h"
 
 #include "rgw_sync_module.h"
-
-#include "common/RWLock.h"
-#include "common/ceph_json.h"
-
-namespace rgw {
-class BucketChangeObserver;
-}
+#include "rgw_sync_trace.h"
 
 struct rgw_datalog_info {
   uint32_t num_shards;
@@ -36,18 +39,18 @@ struct rgw_data_sync_info {
 
   void encode(bufferlist& bl) const {
     ENCODE_START(2, 1, bl);
-    ::encode(state, bl);
-    ::encode(num_shards, bl);
-    ::encode(instance_id, bl);
+    encode(state, bl);
+    encode(num_shards, bl);
+    encode(instance_id, bl);
     ENCODE_FINISH(bl);
   }
 
-  void decode(bufferlist::iterator& bl) {
+  void decode(bufferlist::const_iterator& bl) {
      DECODE_START(2, bl);
-     ::decode(state, bl);
-     ::decode(num_shards, bl);
+     decode(state, bl);
+     decode(num_shards, bl);
      if (struct_v >= 2) {
-       ::decode(instance_id, bl);
+       decode(instance_id, bl);
      }
      DECODE_FINISH(bl);
   }
@@ -83,7 +86,7 @@ struct rgw_data_sync_info {
       state = StateInit;
     }
     JSONDecoder::decode_json("num_shards", num_shards, obj);
-    JSONDecoder::decode_json("instance_id", num_shards, obj);
+    JSONDecoder::decode_json("instance_id", instance_id, obj);
   }
   static void generate_test_instances(std::list<rgw_data_sync_info*>& o);
 
@@ -107,23 +110,23 @@ struct rgw_data_sync_marker {
 
   void encode(bufferlist& bl) const {
     ENCODE_START(1, 1, bl);
-    ::encode(state, bl);
-    ::encode(marker, bl);
-    ::encode(next_step_marker, bl);
-    ::encode(total_entries, bl);
-    ::encode(pos, bl);
-    ::encode(timestamp, bl);
+    encode(state, bl);
+    encode(marker, bl);
+    encode(next_step_marker, bl);
+    encode(total_entries, bl);
+    encode(pos, bl);
+    encode(timestamp, bl);
     ENCODE_FINISH(bl);
   }
 
-  void decode(bufferlist::iterator& bl) {
+  void decode(bufferlist::const_iterator& bl) {
      DECODE_START(1, bl);
-    ::decode(state, bl);
-    ::decode(marker, bl);
-    ::decode(next_step_marker, bl);
-    ::decode(total_entries, bl);
-    ::decode(pos, bl);
-    ::decode(timestamp, bl);
+    decode(state, bl);
+    decode(marker, bl);
+    decode(next_step_marker, bl);
+    decode(total_entries, bl);
+    decode(pos, bl);
+    decode(timestamp, bl);
      DECODE_FINISH(bl);
   }
 
@@ -175,14 +178,14 @@ struct rgw_data_sync_status {
 
   void encode(bufferlist& bl) const {
     ENCODE_START(1, 1, bl);
-    ::encode(sync_info, bl);
+    encode(sync_info, bl);
     /* sync markers are encoded separately */
     ENCODE_FINISH(bl);
   }
 
-  void decode(bufferlist::iterator& bl) {
+  void decode(bufferlist::const_iterator& bl) {
      DECODE_START(1, bl);
-    ::decode(sync_info, bl);
+    decode(sync_info, bl);
     /* sync markers are decoded separately */
      DECODE_FINISH(bl);
   }
@@ -228,34 +231,39 @@ struct rgw_bucket_entry_owner {
 };
 
 class RGWSyncErrorLogger;
+class RGWRESTConn;
 
 struct RGWDataSyncEnv {
-  CephContext *cct;
-  RGWRados *store;
-  RGWRESTConn *conn;
-  RGWAsyncRadosProcessor *async_rados;
-  RGWHTTPManager *http_manager;
-  RGWSyncErrorLogger *error_logger;
+  const DoutPrefixProvider *dpp{nullptr};
+  CephContext *cct{nullptr};
+  RGWRados *store{nullptr};
+  RGWRESTConn *conn{nullptr};
+  RGWAsyncRadosProcessor *async_rados{nullptr};
+  RGWHTTPManager *http_manager{nullptr};
+  RGWSyncErrorLogger *error_logger{nullptr};
+  RGWSyncTraceManager *sync_tracer{nullptr};
   string source_zone;
-  RGWSyncModuleInstanceRef sync_module;
-  rgw::BucketChangeObserver *observer{nullptr};
+  RGWSyncModuleInstanceRef sync_module{nullptr};
+  PerfCounters* counters{nullptr};
 
-  RGWDataSyncEnv() : cct(NULL), store(NULL), conn(NULL), async_rados(NULL), http_manager(NULL), error_logger(NULL), sync_module(NULL) {}
+  RGWDataSyncEnv() {}
 
-  void init(CephContext *_cct, RGWRados *_store, RGWRESTConn *_conn,
+  void init(const DoutPrefixProvider *_dpp, CephContext *_cct, RGWRados *_store, RGWRESTConn *_conn,
             RGWAsyncRadosProcessor *_async_rados, RGWHTTPManager *_http_manager,
-            RGWSyncErrorLogger *_error_logger, const string& _source_zone,
-            RGWSyncModuleInstanceRef& _sync_module,
-            rgw::BucketChangeObserver *_observer) {
+            RGWSyncErrorLogger *_error_logger, RGWSyncTraceManager *_sync_tracer,
+            const string& _source_zone, RGWSyncModuleInstanceRef& _sync_module,
+            PerfCounters* _counters) {
+    dpp = _dpp;
     cct = _cct;
     store = _store;
     conn = _conn;
     async_rados = _async_rados;
     http_manager = _http_manager;
     error_logger = _error_logger;
+    sync_tracer = _sync_tracer;
     source_zone = _source_zone;
     sync_module = _sync_module;
-    observer = _observer;
+    counters = _counters;
   }
 
   string shard_obj_name(int shard_id);
@@ -263,9 +271,9 @@ struct RGWDataSyncEnv {
 };
 
 class RGWRemoteDataLog : public RGWCoroutinesManager {
+  const DoutPrefixProvider *dpp;
   RGWRados *store;
   RGWAsyncRadosProcessor *async_rados;
-  rgw::BucketChangeObserver *observer;
   RGWHTTPManager http_manager;
 
   RGWDataSyncEnv sync_env;
@@ -273,17 +281,21 @@ class RGWRemoteDataLog : public RGWCoroutinesManager {
   RWLock lock;
   RGWDataSyncControlCR *data_sync_cr;
 
+  RGWSyncTraceNodeRef tn;
+
   bool initialized;
 
 public:
-  RGWRemoteDataLog(RGWRados *_store, RGWAsyncRadosProcessor *async_rados,
-                   rgw::BucketChangeObserver *observer)
+  RGWRemoteDataLog(const DoutPrefixProvider *dpp, RGWRados *_store,
+                   RGWAsyncRadosProcessor *async_rados)
     : RGWCoroutinesManager(_store->ctx(), _store->get_cr_registry()),
-      store(_store), async_rados(async_rados), observer(observer),
+      dpp(dpp), store(_store), async_rados(async_rados),
       http_manager(store->ctx(), completion_mgr),
       lock("RGWRemoteDataLog::lock"), data_sync_cr(NULL),
       initialized(false) {}
-  int init(const string& _source_zone, RGWRESTConn *_conn, RGWSyncErrorLogger *_error_logger, RGWSyncModuleInstanceRef& module);
+  int init(const string& _source_zone, RGWRESTConn *_conn, RGWSyncErrorLogger *_error_logger,
+           RGWSyncTraceManager *_sync_tracer, RGWSyncModuleInstanceRef& module,
+           PerfCounters* _counters);
   void finish();
 
   int read_log_info(rgw_datalog_info *log_info);
@@ -298,7 +310,7 @@ public:
   void wakeup(int shard_id, set<string>& keys);
 };
 
-class RGWDataSyncStatusManager {
+class RGWDataSyncStatusManager : public DoutPrefixProvider {
   RGWRados *store;
   rgw_rados_ref ref;
 
@@ -306,6 +318,7 @@ class RGWDataSyncStatusManager {
   RGWRESTConn *conn;
   RGWSyncErrorLogger *error_logger;
   RGWSyncModuleInstanceRef sync_module;
+  PerfCounters* counters;
 
   RGWRemoteDataLog source_log;
 
@@ -318,17 +331,16 @@ class RGWDataSyncStatusManager {
 
 public:
   RGWDataSyncStatusManager(RGWRados *_store, RGWAsyncRadosProcessor *async_rados,
-                           const string& _source_zone,
-                           rgw::BucketChangeObserver *observer = nullptr)
+                           const string& _source_zone, PerfCounters* counters)
     : store(_store), source_zone(_source_zone), conn(NULL), error_logger(NULL),
-      sync_module(nullptr),
-      source_log(store, async_rados, observer), num_shards(0) {}
+      sync_module(nullptr), counters(counters),
+      source_log(this, store, async_rados), num_shards(0) {}
   RGWDataSyncStatusManager(RGWRados *_store, RGWAsyncRadosProcessor *async_rados,
-                           const string& _source_zone, const RGWSyncModuleInstanceRef& _sync_module,
-                           rgw::BucketChangeObserver *observer = nullptr)
+                           const string& _source_zone, PerfCounters* counters,
+                           const RGWSyncModuleInstanceRef& _sync_module)
     : store(_store), source_zone(_source_zone), conn(NULL), error_logger(NULL),
-      sync_module(_sync_module),
-      source_log(store, async_rados, observer), num_shards(0) {}
+      sync_module(_sync_module), counters(counters),
+      source_log(this, store, async_rados), num_shards(0) {}
   ~RGWDataSyncStatusManager() {
     finalize();
   }
@@ -367,6 +379,11 @@ public:
   void stop() {
     source_log.finish();
   }
+
+  // implements DoutPrefixProvider
+  CephContext *get_cct() const override { return store->ctx(); }
+  unsigned get_subsys() const override;
+  std::ostream& gen_prefix(std::ostream& out) const override;
 };
 
 class RGWBucketSyncStatusManager;
@@ -382,15 +399,15 @@ struct rgw_bucket_shard_full_sync_marker {
 
   void encode(bufferlist& bl) const {
     ENCODE_START(1, 1, bl);
-    ::encode(position, bl);
-    ::encode(count, bl);
+    encode(position, bl);
+    encode(count, bl);
     ENCODE_FINISH(bl);
   }
 
-  void decode(bufferlist::iterator& bl) {
+  void decode(bufferlist::const_iterator& bl) {
      DECODE_START(1, bl);
-    ::decode(position, bl);
-    ::decode(count, bl);
+    decode(position, bl);
+    decode(count, bl);
      DECODE_FINISH(bl);
   }
 
@@ -408,13 +425,13 @@ struct rgw_bucket_shard_inc_sync_marker {
 
   void encode(bufferlist& bl) const {
     ENCODE_START(1, 1, bl);
-    ::encode(position, bl);
+    encode(position, bl);
     ENCODE_FINISH(bl);
   }
 
-  void decode(bufferlist::iterator& bl) {
+  void decode(bufferlist::const_iterator& bl) {
      DECODE_START(1, bl);
-    ::decode(position, bl);
+    decode(position, bl);
      DECODE_FINISH(bl);
   }
 
@@ -444,17 +461,17 @@ struct rgw_bucket_shard_sync_info {
 
   void encode(bufferlist& bl) const {
     ENCODE_START(1, 1, bl);
-    ::encode(state, bl);
-    ::encode(full_marker, bl);
-    ::encode(inc_marker, bl);
+    encode(state, bl);
+    encode(full_marker, bl);
+    encode(inc_marker, bl);
     ENCODE_FINISH(bl);
   }
 
-  void decode(bufferlist::iterator& bl) {
+  void decode(bufferlist::const_iterator& bl) {
      DECODE_START(1, bl);
-     ::decode(state, bl);
-     ::decode(full_marker, bl);
-     ::decode(inc_marker, bl);
+     decode(state, bl);
+     decode(full_marker, bl);
+     decode(inc_marker, bl);
      DECODE_FINISH(bl);
   }
 
@@ -482,6 +499,7 @@ struct rgw_bucket_index_marker_info {
 
 
 class RGWRemoteBucketLog : public RGWCoroutinesManager {
+  const DoutPrefixProvider *dpp;
   RGWRados *store;
   RGWRESTConn *conn{nullptr};
   string source_zone;
@@ -497,13 +515,19 @@ class RGWRemoteBucketLog : public RGWCoroutinesManager {
   RGWBucketSyncCR *sync_cr{nullptr};
 
 public:
-  RGWRemoteBucketLog(RGWRados *_store, RGWBucketSyncStatusManager *_sm,
-                     RGWAsyncRadosProcessor *_async_rados, RGWHTTPManager *_http_manager) : RGWCoroutinesManager(_store->ctx(), _store->get_cr_registry()), store(_store),
-                                       status_manager(_sm), async_rados(_async_rados), http_manager(_http_manager) {}
+  RGWRemoteBucketLog(const DoutPrefixProvider *_dpp, RGWRados *_store,
+                     RGWBucketSyncStatusManager *_sm,
+                     RGWAsyncRadosProcessor *_async_rados,
+                     RGWHTTPManager *_http_manager)
+    : RGWCoroutinesManager(_store->ctx(), _store->get_cr_registry()),
+      dpp(_dpp), store(_store), status_manager(_sm),
+      async_rados(_async_rados), http_manager(_http_manager)
+  {}
 
   int init(const string& _source_zone, RGWRESTConn *_conn,
            const rgw_bucket& bucket, int shard_id,
            RGWSyncErrorLogger *_error_logger,
+           RGWSyncTraceManager *_sync_tracer,
            RGWSyncModuleInstanceRef& _sync_module);
   void finish();
 
@@ -514,7 +538,7 @@ public:
   void wakeup();
 };
 
-class RGWBucketSyncStatusManager {
+class RGWBucketSyncStatusManager : public DoutPrefixProvider {
   RGWRados *store;
 
   RGWCoroutinesManager cr_mgr;
@@ -555,26 +579,47 @@ public:
   int init_sync_status();
 
   static string status_oid(const string& source_zone, const rgw_bucket_shard& bs);
+  static string obj_status_oid(const string& source_zone, const rgw_obj& obj); /* can be used by sync modules */
+
+  // implements DoutPrefixProvider
+  CephContext *get_cct() const override { return store->ctx(); }
+  unsigned get_subsys() const override;
+  std::ostream& gen_prefix(std::ostream& out) const override;
 
   int read_sync_status();
   int run();
 };
 
 /// read the sync status of all bucket shards from the given source zone
-int rgw_bucket_sync_status(RGWRados *store, const std::string& source_zone,
+int rgw_bucket_sync_status(const DoutPrefixProvider *dpp, RGWRados *store, const std::string& source_zone,
                            const RGWBucketInfo& bucket_info,
                            std::vector<rgw_bucket_shard_sync_info> *status);
 
 class RGWDefaultSyncModule : public RGWSyncModule {
 public:
   RGWDefaultSyncModule() {}
+  bool supports_writes() override { return true; }
   bool supports_data_export() override { return true; }
-  int create_instance(CephContext *cct, map<string, string, ltstr_nocase>& config, RGWSyncModuleInstanceRef *instance) override;
+  int create_instance(CephContext *cct, const JSONFormattable& config, RGWSyncModuleInstanceRef *instance) override;
+};
+
+class RGWArchiveSyncModule : public RGWDefaultSyncModule {
+public:
+  RGWArchiveSyncModule() {}
+  bool supports_writes() override { return true; }
+  bool supports_data_export() override { return false; }
+  int create_instance(CephContext *cct, const JSONFormattable& config, RGWSyncModuleInstanceRef *instance) override;
 };
 
 // DataLogTrimCR factory function
 extern RGWCoroutine* create_data_log_trim_cr(RGWRados *store,
                                              RGWHTTPManager *http,
                                              int num_shards, utime_t interval);
+
+// factory function for datalog trim via radosgw-admin
+RGWCoroutine* create_admin_data_log_trim_cr(RGWRados *store,
+                                            RGWHTTPManager *http,
+                                            int num_shards,
+                                            std::vector<std::string>& markers);
 
 #endif

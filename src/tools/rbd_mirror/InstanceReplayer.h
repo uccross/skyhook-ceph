@@ -10,14 +10,13 @@
 #include "common/AsyncOpTracker.h"
 #include "common/Formatter.h"
 #include "common/Mutex.h"
-#include "types.h"
+#include "tools/rbd_mirror/Types.h"
 
 namespace librbd { class ImageCtx; }
 
 namespace rbd {
 namespace mirror {
 
-template <typename> class ImageDeleter;
 template <typename> class ImageReplayer;
 template <typename> class InstanceWatcher;
 template <typename> class ServiceDaemon;
@@ -29,11 +28,10 @@ public:
   static InstanceReplayer* create(
       Threads<ImageCtxT> *threads,
       ServiceDaemon<ImageCtxT>* service_daemon,
-      ImageDeleter<ImageCtxT>* image_deleter,
       RadosRef local_rados, const std::string &local_mirror_uuid,
       int64_t local_pool_id) {
-    return new InstanceReplayer(threads, service_daemon, image_deleter,
-                                local_rados, local_mirror_uuid, local_pool_id);
+    return new InstanceReplayer(threads, service_daemon, local_rados,
+                                local_mirror_uuid, local_pool_id);
   }
   void destroy() {
     delete this;
@@ -41,10 +39,11 @@ public:
 
   InstanceReplayer(Threads<ImageCtxT> *threads,
                    ServiceDaemon<ImageCtxT>* service_daemon,
-		   ImageDeleter<ImageCtxT>* image_deleter,
 		   RadosRef local_rados, const std::string &local_mirror_uuid,
 		   int64_t local_pool_id);
   ~InstanceReplayer();
+
+  bool is_blacklisted() const;
 
   int init();
   void shut_down();
@@ -86,18 +85,18 @@ private:
 
   Threads<ImageCtxT> *m_threads;
   ServiceDaemon<ImageCtxT>* m_service_daemon;
-  ImageDeleter<ImageCtxT>* m_image_deleter;
   RadosRef m_local_rados;
   std::string m_local_mirror_uuid;
   int64_t m_local_pool_id;
 
-  Mutex m_lock;
+  mutable Mutex m_lock;
   AsyncOpTracker m_async_op_tracker;
   std::map<std::string, ImageReplayer<ImageCtxT> *> m_image_replayers;
   Peers m_peers;
   Context *m_image_state_check_task = nullptr;
   Context *m_on_shut_down = nullptr;
   bool m_manual_stop = false;
+  bool m_blacklisted = false;
 
   void wait_for_ops();
   void handle_wait_for_ops(int r);

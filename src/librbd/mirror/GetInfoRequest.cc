@@ -23,35 +23,6 @@ using librbd::util::create_rados_callback;
 
 template <typename I>
 void GetInfoRequest<I>::send() {
-  refresh_image();
-}
-
-template <typename I>
-void GetInfoRequest<I>::refresh_image() {
-  if (!m_image_ctx.state->is_refresh_required()) {
-    get_mirror_image();
-    return;
-  }
-
-  CephContext *cct = m_image_ctx.cct;
-  ldout(cct, 20) << dendl;
-
-  auto ctx = create_context_callback<
-    GetInfoRequest<I>, &GetInfoRequest<I>::handle_refresh_image>(this);
-  m_image_ctx.state->refresh(ctx);
-}
-
-template <typename I>
-void GetInfoRequest<I>::handle_refresh_image(int r) {
-  CephContext *cct = m_image_ctx.cct;
-  ldout(cct, 20) << "r=" << r << dendl;
-
-  if (r < 0) {
-    lderr(cct) << "failed to refresh image: " << cpp_strerror(r) << dendl;
-    finish(r);
-    return;
-  }
-
   get_mirror_image();
 }
 
@@ -66,7 +37,7 @@ void GetInfoRequest<I>::get_mirror_image() {
   librados::AioCompletion *comp = create_rados_callback<
     GetInfoRequest<I>, &GetInfoRequest<I>::handle_get_mirror_image>(this);
   int r = m_image_ctx.md_ctx.aio_operate(RBD_MIRRORING, comp, &op, &m_out_bl);
-  assert(r == 0);
+  ceph_assert(r == 0);
   comp->release();
 }
 
@@ -78,7 +49,7 @@ void GetInfoRequest<I>::handle_get_mirror_image(int r) {
   m_mirror_image->state = cls::rbd::MIRROR_IMAGE_STATE_DISABLED;
   *m_promotion_state = PROMOTION_STATE_NON_PRIMARY;
   if (r == 0) {
-    bufferlist::iterator iter = m_out_bl.begin();
+    auto iter = m_out_bl.cbegin();
     r = cls_client::mirror_image_get_finish(&iter, m_mirror_image);
   }
 

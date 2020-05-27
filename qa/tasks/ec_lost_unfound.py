@@ -21,7 +21,7 @@ def task(ctx, config):
     assert isinstance(config, dict), \
         'lost_unfound task only accepts a dict for configuration'
     first_mon = teuthology.get_first_mon(ctx, config)
-    (mon,) = ctx.cluster.only(first_mon).remotes.iterkeys()
+    (mon,) = ctx.cluster.only(first_mon).remotes.keys()
 
     manager = ceph_manager.CephManager(
         mon,
@@ -123,7 +123,7 @@ def task(ctx, config):
             # verify that i can list them direct from the osd
             log.info('listing missing/lost in %s state %s', pg['pgid'],
                      pg['state']);
-            m = manager.list_pg_missing(pg['pgid'])
+            m = manager.list_pg_unfound(pg['pgid'])
             log.info('%s' % m)
             assert m['num_unfound'] == pg['stat_sum']['num_objects_unfound']
 

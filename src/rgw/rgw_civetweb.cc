@@ -8,21 +8,24 @@
 
 #include "civetweb/civetweb.h"
 #include "rgw_civetweb.h"
+#include "rgw_perf_counters.h"
 
 
 #define dout_subsys ceph_subsys_rgw
 
 size_t RGWCivetWeb::write_data(const char *buf, const size_t len)
 {
+  size_t off = 0;
   auto to_sent = len;
   while (to_sent) {
-    const int ret = mg_write(conn, buf, len);
+    const int ret = mg_write(conn, buf + off, to_sent);
     if (ret < 0 || ! ret) {
       /* According to the documentation of mg_write() it always returns -1 on
        * error. The details aren't available, so we will just throw EIO. Same
        * goes to 0 that is associated with writing to a closed connection. */
       throw rgw::io::Exception(EIO, std::system_category());
     } else {
+      off += static_cast<size_t>(ret);
       to_sent -= static_cast<size_t>(ret);
     }
   }
@@ -51,7 +54,8 @@ RGWCivetWeb::RGWCivetWeb(mg_connection* const conn)
 
 size_t RGWCivetWeb::read_data(char *buf, size_t len)
 {
-  int c, ret;
+  size_t c;
+  int ret;
   if (got_eof_on_read) {
     return 0;
   }
@@ -75,6 +79,8 @@ void RGWCivetWeb::flush()
 
 size_t RGWCivetWeb::complete_request()
 {
+  perfcounter->inc(l_rgw_qlen, -1);
+  perfcounter->inc(l_rgw_qactive, -1);
   return 0;
 }
 
@@ -89,7 +95,7 @@ int RGWCivetWeb::init_env(CephContext *cct)
   }
 
   for (int i = 0; i < info->num_headers; i++) {
-    const struct mg_request_info::mg_header* header = &info->http_headers[i];
+    const auto header = &info->http_headers[i];
 
     if (header->name == nullptr || header->value==nullptr) {
       lderr(cct) << "client supplied malformatted headers" << dendl;
@@ -128,11 +134,14 @@ int RGWCivetWeb::init_env(CephContext *cct)
     env.set(buf, value);
   }
 
+  perfcounter->inc(l_rgw_qlen);
+  perfcounter->inc(l_rgw_qactive);
+
   env.set("REMOTE_ADDR", info->remote_addr);
   env.set("REQUEST_METHOD", info->request_method);
   env.set("HTTP_VERSION", info->http_version);
   env.set("REQUEST_URI", info->request_uri); // get the full uri, we anyway handle abs uris later
-  env.set("SCRIPT_URI", info->uri); /* FIXME */
+  env.set("SCRIPT_URI", info->local_uri);
   if (info->query_string) {
     env.set("QUERY_STRING", info->query_string);
   }

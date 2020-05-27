@@ -52,3 +52,12 @@
 [submodule "src/rapidjson"]
 	path = src/rapidjson
 	url = https://github.com/ceph/rapidjson
+[submodule "src/dmclock"]
+	path = src/dmclock
+	url = https://github.com/ceph/dmclock.git
+[submodule "src/seastar"]
+	path = src/seastar
+	url = https://github.com/ceph/seastar.git
+[submodule "src/c-ares"]
+	path = src/c-ares
+	url = https://github.com/ceph/c-ares.git
