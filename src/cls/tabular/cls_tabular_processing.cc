@@ -642,8 +642,8 @@ int processArrowCol(
                         static_cast<arrow::ListBuilder *>(builder)->Append();
 
                         // extract list builder as int32 builder
-                        arrow::ListBuilder* lb = static_cast<arrow::ListBuilder *>(builder);
-                        arrow::Int32Builder* ib = static_cast<arrow::Int32Builder *>(lb->value_builder());
+                        // arrow::ListBuilder* lb = static_cast<arrow::ListBuilder *>(builder);
+                        // arrow::Int32Builder* ib = static_cast<arrow::Int32Builder *>(lb->value_builder());
 
                         // TODO: extract prev values and append to ib
                         // ib->AppendValues(vector.data(), vector.size());
