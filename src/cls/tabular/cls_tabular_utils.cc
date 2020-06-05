@@ -2422,7 +2422,10 @@ int extract_arrow_from_buffer(std::shared_ptr<arrow::Table>* table, const std::s
     // Initialization related to reading from a buffer
     const std::shared_ptr<arrow::io::InputStream> buf_reader = std::make_shared<arrow::io::BufferReader>(buffer);
     std::shared_ptr<arrow::ipc::RecordBatchReader> reader;
-    arrow::ipc::RecordBatchStreamReader::Open(buf_reader, &reader);
+    arrow::Result<std::shared_ptr<arrow::ipc::RecordBatchReader>> result = arrow::ipc::RecordBatchStreamReader::Open(buf_reader);
+    if (result.ok()) {
+        reader = std::move(result).ValueOrDie();
+    } 
 
     auto schema = reader->schema();
     auto metadata = schema->metadata();
@@ -2448,7 +2451,10 @@ int extract_arrow_from_buffer(std::shared_ptr<arrow::Table>* table, const std::s
         *table = arrow::Table::Make(schema, array_list);
     }
     else {
-        arrow::Table::FromRecordBatches(batch_vec, table);
+        arrow::Result<std::shared_ptr<arrow::Table>> result = arrow::Table::FromRecordBatches(batch_vec);
+        if (result.ok()) {
+            *table = std::move(result).ValueOrDie();
+        } 
     }
     return 0;
 }
@@ -2753,7 +2759,11 @@ int convert_arrow_to_buffer(const std::shared_ptr<arrow::Table> &table, std::sha
         output = out.ValueOrDie();
         arrow::io::OutputStream *raw_out = output.get();
         arrow::Table *raw_table = table.get();
-        arrow::ipc::RecordBatchStreamWriter::Open(raw_out, raw_table->schema(), &writer);
+        const arrow::ipc::IpcWriteOptions options = arrow::ipc::IpcWriteOptions::Defaults();
+        arrow::Result<std::shared_ptr<arrow::ipc::RecordBatchWriter>> result = arrow::ipc::NewStreamWriter(raw_out, raw_table->schema(), options);
+        if (result.ok()) {
+            writer = std::move(result).ValueOrDie();
+        }                  
     }
 
     // Initilization related to reading from arrow
@@ -3059,7 +3069,7 @@ long long int printArrowbufRowAsCsv(const char* dataptr,
     std::shared_ptr<arrow::Buffer> buffer;
 
     std::string str_buff(dataptr, datasz);
-    arrow::Buffer::FromString(str_buff, &buffer);
+    buffer = arrow::Buffer::FromString(str_buff);
 
     extract_arrow_from_buffer(&table, buffer);
     // From Table get the schema and from schema get the skyhook schema
@@ -3213,7 +3223,7 @@ long long int printArrowbufRowAsPGBinary(
     std::shared_ptr<arrow::Buffer> buffer;
 
     std::string str_buff(dataptr, datasz);
-    arrow::Buffer::FromString(str_buff, &buffer);
+    buffer = arrow::Buffer::FromString(str_buff);
 
     extract_arrow_from_buffer(&table, buffer);
     // From Table get the schema and from schema get the skyhook schema
@@ -3488,7 +3498,7 @@ long long int printArrowbufRowAsPyArrowBinary(
     std::shared_ptr<arrow::Table> table;
     std::shared_ptr<arrow::Buffer> buffer;
     std::string str_buff(dataptr, datasz);
-    arrow::Buffer::FromString(str_buff, &buffer);
+    buffer = arrow::Buffer::FromString(str_buff);
     extract_arrow_from_buffer(&table, buffer);
 
     // From Table get the schema and from schema get the skyhook schema
